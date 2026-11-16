@@ -5,6 +5,7 @@ const A = require("./auth");
 const R = require("./recibos");
 const { fechaValida, hoyPanama, sumarDias, toCents } = require("./calc");
 const { importar, limpiarCierre, slug } = require("./importar");
+const SAP = require("./sap");
 
 const api = express.Router();
 const OFICINA = ["gerente", "asistente"];
@@ -14,6 +15,8 @@ const GERENTE = ["gerente"];
 // Envuelve rutas async para que los errores lleguen al manejador.
 const h = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 const bad = (res, msg, status = 400) => res.status(status).json({ error: msg });
+// Código de camión SAP: mayúsculas, sin espacios (CAM-90, PE-PTL-02).
+const camionSap = (v) => String(v || "").trim().toUpperCase().replace(/\s+/g, "-").replace(/[^A-Z0-9-]/g, "").slice(0, 40);
 
 // Protección CSRF: toda escritura debe venir como JSON (un formulario de otro sitio no puede enviarlo).
 api.use((req, res, next) => {
@@ -37,7 +40,7 @@ api.get("/choferes", A.requiere(), h(async (req, res) => {
     const { rows } = await q("SELECT id, nombre, ruta, tipo, activo FROM choferes WHERE id = $1", [req.user.chofer_id]);
     return res.json({ choferes: rows });
   }
-  const { rows } = await q("SELECT id, nombre, ruta, tipo, activo FROM choferes ORDER BY orden, nombre");
+  const { rows } = await q("SELECT id, nombre, ruta, tipo, activo, camion_sap AS \"camionSap\" FROM choferes ORDER BY orden, nombre");
   res.json({ choferes: rows });
 }));
 api.put("/choferes", A.requiere(...GERENTE), h(async (req, res) => {
@@ -54,9 +57,11 @@ api.put("/choferes", A.requiere(...GERENTE), h(async (req, res) => {
       let id = ch.id && actuales.some((a) => a.id === ch.id) ? ch.id : null;
       if (!id) { const b = slug(nombre); id = b; let k = 2; while (used.has(id) || actuales.some((a) => a.id === id)) id = b + "-" + k++; }
       used.add(id); keep.add(id);
-      await c.query(`INSERT INTO choferes (id, nombre, ruta, tipo, activo, orden) VALUES ($1,$2,$3,$4,$5,$6)
-        ON CONFLICT (id) DO UPDATE SET nombre = EXCLUDED.nombre, ruta = EXCLUDED.ruta, tipo = EXCLUDED.tipo, activo = EXCLUDED.activo, orden = EXCLUDED.orden`,
-      [id, nombre, String(ch.ruta || "").trim().slice(0, 120), ch.tipo === "Food Services" ? "Food Services" : "Ruta", ch.activo !== false, i++]);
+      const cam = ch.camionSap === undefined ? null : camionSap(ch.camionSap);
+      await c.query(`INSERT INTO choferes (id, nombre, ruta, tipo, activo, orden, camion_sap) VALUES ($1,$2,$3,$4,$5,$6,COALESCE($7,''))
+        ON CONFLICT (id) DO UPDATE SET nombre = EXCLUDED.nombre, ruta = EXCLUDED.ruta, tipo = EXCLUDED.tipo, activo = EXCLUDED.activo, orden = EXCLUDED.orden,
+          camion_sap = COALESCE($7, choferes.camion_sap)`,
+      [id, nombre, String(ch.ruta || "").trim().slice(0, 120), ch.tipo === "Food Services" ? "Food Services" : "Ruta", ch.activo !== false, i++, cam]);
     }
     // Quitados de la lista: se borran solo si no tienen recibos, ventas ni usuario; si no, quedan inactivos.
     for (const a of actuales) {
@@ -68,7 +73,7 @@ api.put("/choferes", A.requiere(...GERENTE), h(async (req, res) => {
     }
     await audit(c, req.user.id, "choferes", { n: keep.size });
   });
-  const { rows } = await q("SELECT id, nombre, ruta, tipo, activo FROM choferes ORDER BY orden, nombre");
+  const { rows } = await q("SELECT id, nombre, ruta, tipo, activo, camion_sap AS \"camionSap\" FROM choferes ORDER BY orden, nombre");
   res.json({ choferes: rows, avisos });
 }));
 
@@ -169,6 +174,78 @@ api.put("/cierre/:fecha", A.requiere(...OFICINA), h(async (req, res) => {
     RETURNING datos`, [f, JSON.stringify(cambios), req.user.id]);
   await audit(null, req.user.id, "cierre", { fecha: f, claves: Object.keys(cambios) });
   res.json({ cierre: rows[0].datos });
+}));
+
+/* ---------- facturación de SAP por camión ---------- */
+const sapOut = (r) => ({ camion: r.camion, documentos: r.documentos, facturado: Number(r.facturado_c), merma: Number(r.merma_c),
+  devolucion: Number(r.devolucion_c), neto: Number(r.neto_c), varios: r.varios, consultado: r.consultado });
+async function sapGuardado(fv) {
+  const { rows } = await q("SELECT * FROM sap_facturacion WHERE fecha_venta = $1 ORDER BY camion = 'Sin camion', camion", [fv]);
+  return { fechaVenta: fv, filas: rows.map(sapOut), consultado: rows[0] ? rows[0].consultado : null, configurado: SAP.configurado() };
+}
+// Lo último que se leyó de SAP para esa fecha de venta (no consulta SAP).
+api.get("/sap/facturacion", A.requiere(...OFICINA), h(async (req, res) => {
+  const fv = req.query.fechaVenta;
+  if (!fechaValida(fv)) return bad(res, "Fecha no válida.");
+  res.json(await sapGuardado(fv));
+}));
+// Consulta SAP (solo lectura) y guarda el resumen por camión de esa fecha de venta.
+api.post("/sap/consultar", A.requiere(...OFICINA), h(async (req, res) => {
+  const fv = req.body && req.body.fechaVenta;
+  if (!fechaValida(fv)) return bad(res, "Fecha no válida.");
+  if (fv > hoyPanama()) return bad(res, "La fecha de venta no puede ser futura.");
+  let filas;
+  try { filas = await SAP.resumenPorCamion(fv, fv); }
+  catch (e) {
+    console.error("SAP:", e.message);
+    return bad(res, e.status === 503 ? e.message : "No se pudo leer SAP en este momento. Intenta de nuevo en unos minutos.", 502);
+  }
+  await tx(async (c) => {
+    await c.query("DELETE FROM sap_facturacion WHERE fecha_venta = $1", [fv]);
+    for (const f of filas) {
+      await c.query(`INSERT INTO sap_facturacion (fecha_venta, camion, documentos, facturado_c, merma_c, devolucion_c, neto_c, varios, consultado_por)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT (fecha_venta, camion) DO UPDATE SET documentos = sap_facturacion.documentos + EXCLUDED.documentos,
+        facturado_c = sap_facturacion.facturado_c + EXCLUDED.facturado_c, merma_c = sap_facturacion.merma_c + EXCLUDED.merma_c,
+        devolucion_c = sap_facturacion.devolucion_c + EXCLUDED.devolucion_c, neto_c = sap_facturacion.neto_c + EXCLUDED.neto_c, varios = sap_facturacion.varios + EXCLUDED.varios`,
+      [fv, f.camion, f.documentos, f.facturado, f.merma, f.devolucion, f.neto, f.varios, req.user.id]);
+    }
+    await audit(c, req.user.id, "sap_consulta", { fechaVenta: fv, camiones: filas.length, neto: filas.reduce((a, f) => a + f.neto, 0) });
+  });
+  res.json(await sapGuardado(fv));
+}));
+// Pasa la facturación de SAP a la venta de cada chofer en la fecha de entrega.
+// asignaciones: [{ camion, choferId }]; base: "neto" o "facturado". Varios camiones del mismo chofer se suman.
+api.post("/sap/aplicar", A.requiere(...OFICINA), h(async (req, res) => {
+  const b = req.body || {};
+  if (!fechaValida(b.fecha) || !fechaValida(b.fechaVenta)) return bad(res, "Fecha no válida.");
+  const base = b.base === "facturado" ? "facturado" : "neto";
+  const asig = Array.isArray(b.asignaciones) ? b.asignaciones.filter((a) => a && a.camion && a.choferId) : [];
+  if (!asig.length) return bad(res, "Elige el chofer de al menos un camión.");
+  const { rows: filas } = await q("SELECT * FROM sap_facturacion WHERE fecha_venta = $1", [b.fechaVenta]);
+  if (!filas.length) return bad(res, "Primero consulta SAP para esa fecha de venta.");
+  const porCamion = Object.fromEntries(filas.map((f) => [f.camion, f]));
+  const { rows: chs } = await q("SELECT id FROM choferes");
+  const existe = new Set(chs.map((c) => c.id));
+  const montos = {}, camionDe = {};
+  for (const a of asig) {
+    const f = porCamion[a.camion];
+    if (!f || a.camion === "Sin camion" || !existe.has(a.choferId)) continue;
+    montos[a.choferId] = (montos[a.choferId] || 0) + Number(base === "neto" ? f.neto_c : f.facturado_c);
+    (camionDe[a.choferId] = camionDe[a.choferId] || []).push(a.camion);
+  }
+  if (!Object.keys(montos).length) return bad(res, "Ningún camión se pudo asignar.");
+  await tx(async (c) => {
+    for (const [cid, monto] of Object.entries(montos)) {
+      const { rows: prev } = await c.query("SELECT monto_c FROM ventas WHERE fecha = $1 AND chofer_id = $2", [b.fecha, cid]);
+      await c.query(`INSERT INTO ventas (fecha, chofer_id, monto_c, actualizado_por) VALUES ($1,$2,$3,$4)
+        ON CONFLICT (fecha, chofer_id) DO UPDATE SET monto_c = EXCLUDED.monto_c, actualizado = now(), actualizado_por = EXCLUDED.actualizado_por`, [b.fecha, cid, monto, req.user.id]);
+      // La venta anterior queda en la auditoría.
+      await audit(c, req.user.id, "venta", { fecha: b.fecha, choferId: cid, monto, anterior: prev[0] ? prev[0].monto_c : null, origen: "SAP " + base, fechaVenta: b.fechaVenta, camiones: camionDe[cid] });
+      // Recuerda el camión para la próxima vez (solo si el chofer usó un único camión).
+      if (b.recordar !== false && camionDe[cid].length === 1) await c.query("UPDATE choferes SET camion_sap = $2 WHERE id = $1", [cid, camionDe[cid][0]]);
+    }
+  });
+  res.json({ ok: true, ventas: montos });
 }));
 
 /* ---------- oficina: verificar, eliminar, versiones ---------- */
@@ -316,7 +393,7 @@ api.post("/importar", A.requiere(...GERENTE), h(async (req, res) => {
 }));
 api.get("/respaldo", A.requiere(...GERENTE), h(async (req, res) => {
   const [ch, rs, vs, cs, pr, an, us] = await Promise.all([
-    q("SELECT id, nombre, ruta, tipo, activo FROM choferes ORDER BY orden, nombre"),
+    q("SELECT id, nombre, ruta, tipo, activo, camion_sap AS \"camionSap\" FROM choferes ORDER BY orden, nombre"),
     q(R.SELECT + " ORDER BY r.fecha"),
     q("SELECT fecha, chofer_id, monto_c FROM ventas"),
     q("SELECT fecha, datos FROM cierres"),

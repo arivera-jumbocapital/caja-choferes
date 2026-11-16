@@ -18,6 +18,7 @@ src/auth.js        inicio de sesión, bcrypt, bloqueo tras 5 intentos (15 min), 
 src/api.js         toda la API con los permisos de cada rol
 src/recibos.js     guardar recibos; cada reemplazo o eliminación deja copia en recibo_versiones
 src/importar.js    importa los .json de los choferes y los respaldos del portal offline
+src/sap.js         lee de SAP (solo lectura) la facturación del día por camión
 src/calc.js        denominaciones y sumas en centavos (los totales siempre se recalculan en el servidor)
 views/             login, chofer, portal (gerencia) y cuenta (cambiar clave)
 public/logo.png    logo oficial sin modificar
@@ -45,6 +46,7 @@ public/logo.png    logo oficial sin modificar
    | `ADMIN_PASSWORD` | clave inicial del gerente (mínimo 6 caracteres) |
    | `TZ` | `America/Panama` |
    | `NODE_ENV` | `production` |
+   | `MSSQL_HOST`, `MSSQL_PORT`, `MSSQL_DATABASE`, `MSSQL_USER`, `MSSQL_PASSWORD` | conexión de solo lectura a SAP para la **Facturación SAP por ruta** (los valores están en la guía de SAP guardada fuera del repositorio; nunca en el código) |
 5. **Health check:** en *Settings* → *Deploy* → *Healthcheck Path* = `/health`.
 6. **Dominio:** *Settings* → *Networking* → *Generate Domain* (queda `algo.up.railway.app`) o agrega un dominio propio.
 7. Abre el enlace, entra con `ADMIN_USER` / `ADMIN_PASSWORD`, ve a **Cambiar mi clave**, y después **borra `ADMIN_PASSWORD`** de las variables (solo se usa cuando no hay ningún usuario).
@@ -70,6 +72,15 @@ npm install
 DATABASE_URL=postgres://usuario:clave@localhost:5432/caja ADMIN_USER=gerente ADMIN_PASSWORD=prueba123 npm start
 ```
 Luego abre http://localhost:3000.
+
+## Facturación SAP por ruta
+
+En el **Panel**, la sección *Facturación SAP por ruta* consulta SAP (facturas y notas de crédito, sin documentos de servicio ni anulados) para la fecha de venta y muestra por camión: documentos, facturado (almacén 09), merma (10), devolución (16) y **neto** = facturado − merma − devolución.
+
+- Cada camión de SAP (`U_CodVehiculo`, p. ej. `CAM-90`, `PE-PTL-02`) se relaciona con un chofer por el campo **Camión SAP** de la *Lista de choferes*, por la ruta escrita en su recibo del día o por su ruta en la lista. Si dos choferes comparten camión, el portal pide elegir.
+- **Pasar a la venta** escribe el neto (o el facturado) en la venta de cada chofer para la fecha de entrega. Si ya había una venta escrita pide confirmar, y la anterior queda en la auditoría. El camión elegido se recuerda para la próxima vez.
+- La fila *Sin camion* son los canales que SAP no registra por camión (supermercados, Food Service, etc.): se muestra pero no se asigna.
+- El día de hoy todavía no tiene todas sus facturas en SAP.
 
 ## Reglas que respeta el servidor
 

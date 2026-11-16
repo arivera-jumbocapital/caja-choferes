@@ -37,6 +37,14 @@ const CHOFERES_INICIALES = [
   ["roderyck-sosa", "Roderyck Sosa", "FS CH-67", "Food Services"],
 ];
 
+// Camión en SAP de cada chofer, deducido de su ruta. Miguel Rodríguez ("CAM 88") e Irving ("Pinzón 04")
+// comparten camión con Nelson Zambrano y Felix B: se dejan en blanco y el portal avisa para elegir.
+const CAMIONES_SAP = {
+  "ezequiel": "PE-PTL-02", "carlos-perez": "CAM-90", "david-rodriguez": "CAM-89", "nelson-zambrano": "CAM-88",
+  "angel-moreno": "UTT-GR-81", "sixto-de-leon": "CAM-86", "sebastian": "PE-PTL-04", "felix-b": "PE-PINZON-04",
+  "basilio-castro": "CAM-87",
+};
+
 // Migraciones idempotentes: se pueden correr en cada arranque.
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS choferes (
@@ -122,6 +130,22 @@ CREATE TABLE IF NOT EXISTS auditoria (
 );
 -- Veces que el chofer corrigió su recibo después de guardarlo (solo se permite una).
 ALTER TABLE recibos ADD COLUMN IF NOT EXISTS correcciones int NOT NULL DEFAULT 0;
+-- Código del camión en SAP (U_CodVehiculo, p. ej. CAM-90 o PE-PTL-02) para cruzar la facturación con el chofer.
+ALTER TABLE choferes ADD COLUMN IF NOT EXISTS camion_sap text NOT NULL DEFAULT '';
+-- Facturación leída de SAP por fecha de venta y camión (montos en centavos).
+CREATE TABLE IF NOT EXISTS sap_facturacion (
+  fecha_venta date NOT NULL,
+  camion text NOT NULL,
+  documentos int NOT NULL DEFAULT 0,
+  facturado_c bigint NOT NULL DEFAULT 0,
+  merma_c bigint NOT NULL DEFAULT 0,
+  devolucion_c bigint NOT NULL DEFAULT 0,
+  neto_c bigint NOT NULL DEFAULT 0,
+  varios int NOT NULL DEFAULT 0,
+  consultado timestamptz NOT NULL DEFAULT now(),
+  consultado_por int NULL,
+  PRIMARY KEY (fecha_venta, camion)
+);
 CREATE INDEX IF NOT EXISTS recibos_fecha_idx ON recibos (fecha);
 CREATE INDEX IF NOT EXISTS versiones_creado_idx ON recibo_versiones (creado DESC);
 CREATE INDEX IF NOT EXISTS auditoria_accion_idx ON auditoria (accion, cuando DESC);
@@ -139,6 +163,12 @@ async function migrate() {
       }
     });
     console.log("Lista inicial de choferes creada (" + CHOFERES_INICIALES.length + ").");
+  }
+  // Una sola vez: llena el camión SAP de los choferes conocidos (sin pisar lo que el gerente ya escribió).
+  const { rows: sap } = await q("SELECT 1 FROM auditoria WHERE accion = 'camiones_sap_iniciales' LIMIT 1");
+  if (!sap[0]) {
+    for (const [id, cam] of Object.entries(CAMIONES_SAP)) await q("UPDATE choferes SET camion_sap = $2 WHERE id = $1 AND camion_sap = ''", [id, cam]);
+    await audit(null, null, "camiones_sap_iniciales", {});
   }
 }
 

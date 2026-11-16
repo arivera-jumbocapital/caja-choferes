@@ -61,7 +61,7 @@ button:disabled { opacity: .45; cursor: default; }
 .btns { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .bar { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; justify-content: space-between; }
 .status { min-height: 1.4em; font-size: .9rem; }
-.status.ok { color: var(--good); } .status.err { color: var(--bad); }
+.status.ok { color: var(--good); } .status.err { color: var(--bad); } .status.warn { color: var(--warn); }
 .drop { border: 2px dashed var(--accent); border-radius: 12px; padding: 34px 18px; text-align: center; background: var(--accent-soft); display: grid; gap: 10px; justify-items: center; }
 .drop.over { background: var(--card); }
 .drop b { font-family: var(--f-display); font-size: 1.25rem; }
@@ -114,7 +114,7 @@ table.matrix input { width: 92px; }
 .kv input { width: 120px; text-align: right; font-family: var(--f-num); padding: 5px 7px; }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .chip { border: 1px dashed var(--warn); color: var(--warn); background: var(--warn-soft); border-radius: 999px; padding: 3px 10px; font-size: .85rem; font-weight: 600; }
-.drv-row { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1.3fr) auto auto auto auto; gap: 8px; align-items: center; padding-block: 6px; border-bottom: 1px solid var(--line-soft); }
+.drv-row { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1.3fr) minmax(0, .9fr) auto auto auto auto; gap: 8px; align-items: center; padding-block: 6px; border-bottom: 1px solid var(--line-soft); }
 @media (max-width: 800px) { .drv-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } }
 .check { display: inline-flex; gap: 6px; align-items: center; font-size: .88rem; white-space: nowrap; font-family: var(--f-body); }
 .check input { width: auto; }
@@ -236,6 +236,19 @@ details.day .scroll { padding: 6px 10px 10px; }
       <div class="scroll"><table class="ledger" id="ledger"></table></div>
     </div>
     <div class="panel" id="detail"></div>
+    <div class="panel" id="sap-panel">
+      <h2>Facturación SAP por ruta</h2>
+      <p class="muted small">Lee de SAP las facturas y notas de crédito del día de venta, agrupadas por camión. <b>Neto</b> = facturado − merma − devolución. Revisa el chofer de cada camión y toca <b>Pasar a la venta</b> para llenar la columna Venta del Panel.</p>
+      <div class="bar" style="padding:0;margin-bottom:8px">
+        <div class="row" style="min-width:min(100%,420px)">
+          <label class="field">Fecha de venta en SAP<input type="date" id="sap-fv"></label>
+          <label class="field">Usar como venta<select id="sap-base"><option value="neto">Neto</option><option value="facturado">Facturado</option></select></label>
+        </div>
+        <div class="btns"><button id="sap-consultar">Consultar SAP</button><button class="primary" id="sap-aplicar">Pasar a la venta</button></div>
+      </div>
+      <div class="status" id="sap-status" role="status"></div>
+      <div class="scroll"><table class="ledger" id="sap-table"></table></div>
+    </div>
   </section>
 
   <!-- HOJA 1 -->
@@ -431,7 +444,7 @@ details.day .scroll { padding: 6px 10px 10px; }
   const pStatus = (msg, cls = "") => { const s = $("p-status"); s.textContent = msg; s.className = "status " + cls; };
   function setFecha(f) {
     S.pFecha = f; $("p-fecha").value = f; $("p-fventa").value = longDate(prevDay(f)); S.selected = null; load(); renderAll();
-    fetchDia(f).then(() => { if (S.pFecha === f) { load(); renderAll(); } }).catch((e) => pStatus("No se pudo cargar el día: " + e.message, "err"));
+    fetchDia(f).then(() => { if (S.pFecha === f) { load(); renderAll(); loadSap(fvDefecto()); } }).catch((e) => pStatus("No se pudo cargar el día: " + e.message, "err"));
   }
   $("p-fecha").addEventListener("change", () => setFecha($("p-fecha").value || today()));
 
@@ -475,6 +488,7 @@ details.day .scroll { padding: 6px 10px 10px; }
   function renderSection(id) { ({ "view-panel": () => guarded(id, renderPanel), "view-hoja1": () => guarded(id, renderHoja1), "view-hoja2": () => guarded(id, renderHoja2) })[id]?.(); }
   function renderAll() {
     renderSection("view-panel"); renderSection("view-hoja1"); renderSection("view-hoja2"); renderBackup(); renderChips();
+    if (!$("sap-panel").contains(document.activeElement)) renderSap();
     if (!$("view-graficas").hidden) renderExec();
     if (!$("view-presentacion").hidden && !$("deck").contains(document.activeElement)) renderDeck();
   }
@@ -754,6 +768,113 @@ details.day .scroll { padding: 6px 10px 10px; }
     pStatus("Reporte descargado.", "ok");
   });
 
+  /* ---------- facturación SAP por ruta ---------- */
+  const SAPS = { fv: "", datos: null, asig: {}, cargando: false, arm: false };
+  const normTxt = (s) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+  // CAM-88 → CAM88; PE-PTL-02 → PTL02; UTT-GR-81 → UTTGR81 (así se escribe en la ruta del portal).
+  const claveCamion = (cam) => normTxt(cam).replace(/^PE(?=[A-Z])/, "");
+  const rutaTiene = (ruta, cam) => { const r = normTxt(ruta), k = claveCamion(cam); if (!k) return false; let i = r.indexOf(k); while (i >= 0) { if (!/\d/.test(r[i + k.length] || "") || !/\d$/.test(k)) return true; i = r.indexOf(k, i + 1); } return false; };
+  // Candidatos para un camión: el camión SAP guardado del chofer, la ruta escrita en su recibo del día y la ruta de la lista.
+  function candidatos(cam) {
+    const recDe = (id) => S.recibos.find((r) => r.choferId === id);
+    return DB.choferes.filter((c) => c.activo !== false).map((c) => {
+      const rec = recDe(c.id);
+      let p = 0;
+      if (normTxt(c.camionSap) && normTxt(c.camionSap) === normTxt(cam)) p += 4;
+      if (rec && rutaTiene(rec.ruta, cam)) p += 3;
+      if (rutaTiene(c.ruta, cam)) p += 2;
+      if (p && rec) p += 1;
+      return { c, p };
+    }).filter((x) => x.p > 0).sort((a, b) => b.p - a.p);
+  }
+  function sugerirCamiones() {
+    SAPS.asig = {};
+    for (const f of (SAPS.datos && SAPS.datos.filas) || []) {
+      if (f.camion === "Sin camion") continue;
+      const cs = candidatos(f.camion);
+      if (cs.length && (cs.length === 1 || cs[0].p > cs[1].p)) SAPS.asig[f.camion] = cs[0].c.id;
+    }
+  }
+  function fvDefecto() {
+    const cuenta = {}; for (const r of S.recibos) if (r.fechaVenta) cuenta[r.fechaVenta] = (cuenta[r.fechaVenta] || 0) + 1;
+    const top = Object.entries(cuenta).sort((a, b) => b[1] - a[1])[0];
+    return top ? top[0] : prevDay(S.pFecha);
+  }
+  const sapMsg = (m, cls = "") => { $("sap-status").textContent = m; $("sap-status").className = "status " + cls; };
+  async function loadSap(fv) {
+    if (!can.oficina) return;
+    SAPS.fv = fv; $("sap-fv").value = fv; SAPS.arm = false;
+    try { const j = await api("GET", "/api/sap/facturacion?fechaVenta=" + fv); if (SAPS.fv !== fv) return; SAPS.datos = j; sugerirCamiones(); sapMsg(""); }
+    catch (e) { SAPS.datos = null; sapMsg("No se pudo cargar la facturación: " + e.message, "err"); }
+    renderSap();
+  }
+  function renderSap() {
+    if (!can.oficina) return;
+    const D = SAPS.datos, filas = (D && D.filas) || [];
+    $("sap-aplicar").disabled = !filas.some((f) => SAPS.asig[f.camion]);
+    $("sap-aplicar").textContent = SAPS.arm ? "Confirmar: reemplazar ventas" : "Pasar a la venta";
+    if (D && !D.configurado) sapMsg("La conexión con SAP no está configurada en el servidor. Agrega las variables MSSQL_* en Railway.", "err");
+    if (!filas.length) {
+      $("sap-table").replaceChildren(el("tbody", {}, el("tr", {}, el("td", { class: "l" }, el("div", { class: "empty", text: SAPS.cargando ? "Consultando SAP…" : "Aún no se ha consultado SAP para la venta del " + longDate(SAPS.fv) + ". Toca Consultar SAP." })))));
+      return;
+    }
+    const base = $("sap-base").value;
+    const usados = {}; for (const [cam, id] of Object.entries(SAPS.asig)) if (id) (usados[id] = usados[id] || []).push(cam);
+    const activos = DB.choferes.filter((c) => c.activo !== false);
+    const head = el("thead", {}, el("tr", {}, ...["Camión SAP", "Chofer", "Docs", "Facturado", "Merma", "Devolución", "Neto", "Venta en Panel", ""].map((h, i) => th(h, i < 2 || i === 8 ? "l" : ""))));
+    const body = el("tbody");
+    const tot = { documentos: 0, facturado: 0, merma: 0, devolucion: 0, neto: 0 }, asignado = { n: 0, monto: 0 };
+    for (const f of filas) {
+      for (const k in tot) tot[k] += f[k];
+      const sin = f.camion === "Sin camion";
+      let celda, aviso = null;
+      if (sin) celda = el("span", { class: "muted small", text: "Otros canales sin camión en SAP" });
+      else {
+        const sel = el("select", { "aria-label": "Chofer del camión " + f.camion, style: "min-width:180px" },
+          el("option", { value: "", text: "— Sin asignar —" }), ...activos.map((c) => el("option", { value: c.id, text: c.nombre + (c.ruta ? " · " + c.ruta : "") })));
+        sel.value = SAPS.asig[f.camion] || "";
+        sel.addEventListener("change", () => { SAPS.asig[f.camion] = sel.value; SAPS.arm = false; renderSap(); });
+        celda = sel;
+        const cs = candidatos(f.camion);
+        if (!SAPS.asig[f.camion]) aviso = el("span", { class: "pill " + (cs.length > 1 ? "warn" : "neutral"), text: cs.length > 1 ? "Elige: " + cs.filter((x) => x.p === cs[0].p).map((x) => x.c.nombre).join(" o ") : "Sin chofer" });
+        else if (usados[SAPS.asig[f.camion]].length > 1) aviso = el("span", { class: "pill warn", title: "Los montos de estos camiones se suman en la venta del chofer", text: "Se suma con " + usados[SAPS.asig[f.camion]].filter((x) => x !== f.camion).join(", ") });
+        if (SAPS.asig[f.camion]) { asignado.n++; asignado.monto += f[base]; }
+      }
+      if (f.varios) aviso = el("span", { class: "pill warn", title: "Documentos con más de un almacén: revisar en SAP", text: f.varios + " doc. con varios almacenes" });
+      const v = !sin && SAPS.asig[f.camion] ? S.ventas[SAPS.asig[f.camion]] : undefined;
+      body.append(el("tr", { class: sin ? "muted" : "" }, td(f.camion, "l"), el("td", { class: "l" }, celda), td(f.documentos), td(fmt(f.facturado)), td(fmt(f.merma)), td(fmt(f.devolucion)), td(fmt(f.neto), "strong"),
+        td(v != null ? fmt(v) : "—", "muted"), el("td", { class: "l" }, aviso)));
+    }
+    const foot = el("tfoot", {},
+      el("tr", {}, td("Total SAP", "l"), td(""), td(tot.documentos), td(fmt(tot.facturado)), td(fmt(tot.merma)), td(fmt(tot.devolucion)), td(fmt(tot.neto)), td(""), td("")),
+      el("tr", {}, td("Asignado a choferes (" + (base === "neto" ? "neto" : "facturado") + ")", "l"), td(asignado.n + " camión(es)", "l"), td(""), td(""), td(""), td(""), td(fmt(asignado.monto)), td(""), td("")));
+    $("sap-table").replaceChildren(head, body, foot);
+    if (D.consultado && !$("sap-status").textContent) sapMsg("Leído de SAP: " + when(D.consultado) + (SAPS.fv >= today() ? " · Ojo: SAP todavía no tiene todas las facturas de hoy" : ""), SAPS.fv >= today() ? "warn" : "");
+  }
+  $("sap-fv").addEventListener("change", () => loadSap($("sap-fv").value || prevDay(S.pFecha)));
+  $("sap-base").addEventListener("change", () => { SAPS.arm = false; renderSap(); });
+  $("sap-consultar").addEventListener("click", async () => {
+    const fv = $("sap-fv").value; if (!fv) return;
+    SAPS.cargando = true; SAPS.arm = false; $("sap-consultar").disabled = true; sapMsg("Consultando SAP…"); renderSap();
+    try { SAPS.datos = await api("POST", "/api/sap/consultar", { fechaVenta: fv }); SAPS.fv = fv; sugerirCamiones(); sapMsg(""); }
+    catch (e) { sapMsg(e.message, "err"); }
+    SAPS.cargando = false; $("sap-consultar").disabled = false; renderSap();
+  });
+  $("sap-aplicar").addEventListener("click", async () => {
+    const asignaciones = Object.entries(SAPS.asig).filter(([, id]) => id).map(([camion, choferId]) => ({ camion, choferId }));
+    if (!asignaciones.length) return;
+    const pisa = asignaciones.some((a) => S.ventas[a.choferId] != null);
+    if (pisa && !SAPS.arm) { SAPS.arm = true; renderSap(); sapMsg("Algunos choferes ya tienen venta escrita. Toca otra vez para reemplazarla (la anterior queda en la auditoría).", "warn"); setTimeout(() => { if (SAPS.arm) { SAPS.arm = false; renderSap(); } }, 8000); return; }
+    SAPS.arm = false;
+    const f = S.pFecha;
+    try {
+      const j = await api("POST", "/api/sap/aplicar", { fecha: f, fechaVenta: SAPS.fv, base: $("sap-base").value, asignaciones });
+      await fetchChoferes(); draft = DB.choferes.map((c) => ({ ...c })); renderDrivers();
+      await refresh();
+      sapMsg("Venta de " + Object.keys(j.ventas).length + " chofer(es) llenada desde SAP para la entrega del " + longDate(f) + ".", "ok");
+    } catch (e) { sapMsg("No se guardó: " + e.message, "err"); }
+  });
+
   /* ---------- choferes y formularios ---------- */
   let draft = [];
   function renderDrivers() {
@@ -762,14 +883,15 @@ details.day .scroll { padding: 6px 10px 10px; }
     list.replaceChildren(...draft.map((c, i) => {
       const n = el("input", { type: "text", value: c.nombre, placeholder: "Nombre", "aria-label": "Nombre" }); n.addEventListener("input", () => c.nombre = n.value);
       const ru = el("input", { type: "text", value: c.ruta || "", placeholder: "Ruta / camión", "aria-label": "Ruta" }); ru.addEventListener("input", () => c.ruta = ru.value);
+      const cs = el("input", { type: "text", value: c.camionSap || "", placeholder: "Camión SAP (CAM-90)", "aria-label": "Camión en SAP", title: "Código del camión en SAP (U_CodVehiculo), por ejemplo CAM-90 o PE-PTL-02" }); cs.addEventListener("input", () => c.camionSap = cs.value);
       const fs = el("input", { type: "checkbox" }); fs.checked = c.tipo === "Food Services"; fs.addEventListener("change", () => c.tipo = fs.checked ? "Food Services" : "Ruta");
       const ac = el("input", { type: "checkbox" }); ac.checked = c.activo !== false; ac.addEventListener("change", () => c.activo = ac.checked);
       const u = USUARIOS.find((x) => x.choferId === c.id && x.activo);
       const form = el("span", { class: "small " + (u ? "muted" : "neg"), text: !c.id ? "Nuevo (sin guardar)" : u ? "Usuario: " + u.usuario : "Sin usuario" });
-      return el("div", { class: "drv-row" }, n, ru, el("label", { class: "check" }, fs, "Food Services"), el("label", { class: "check" }, ac, "Activo"), form, el("button", { class: "danger sm", text: "Quitar", onclick: () => { draft.splice(i, 1); renderDrivers(); } }));
+      return el("div", { class: "drv-row" }, n, ru, cs, el("label", { class: "check" }, fs, "Food Services"), el("label", { class: "check" }, ac, "Activo"), form, el("button", { class: "danger sm", text: "Quitar", onclick: () => { draft.splice(i, 1); renderDrivers(); } }));
     }));
   }
-  $("drv-add").addEventListener("click", () => { draft.push({ id: "", nombre: "", ruta: "", tipo: "Ruta", activo: true }); renderDrivers(); });
+  $("drv-add").addEventListener("click", () => { draft.push({ id: "", nombre: "", ruta: "", camionSap: "", tipo: "Ruta", activo: true }); renderDrivers(); });
   $("drv-save").addEventListener("click", async () => {
     const st = $("drv-status");
     try {
