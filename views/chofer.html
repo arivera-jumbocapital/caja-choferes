@@ -1,0 +1,310 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Recibo de Dinero · Tasty Choice</title>
+<link rel="icon" href="/logo.png">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Semi+Condensed:wght@600;700&family=IBM+Plex+Mono:wght@500;600&display=swap">
+<style>
+:root {
+  --brand-red: #c8141b; --brand-blue: #0a4d8f; --brand-gold: #f2b230;
+  --paper: #f2f4f7; --card: #ffffff; --ink: #16202b; --muted: #5a6572; --line: #d5dce4; --line-soft: #e9edf2;
+  --accent: #0a4d8f; --accent-soft: #e3edf8; --accent-ink: #ffffff; --good: #17703f; --good-soft: #e2f3e9; --bad: #b42318; --bad-soft: #fbe7e5; --warn: #9a5800; --warn-soft: #fbefdc;
+  --f-display: "Barlow Semi Condensed", "Arial Narrow", system-ui, sans-serif;
+  --f-body: "Barlow", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --f-num: "IBM Plex Mono", ui-monospace, Consolas, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) { :root {
+  --brand-red: #ff5a5f; --brand-blue: #7fb2ec; --paper: #0e1318; --card: #161d25; --ink: #e5eaf0; --muted: #97a2ae; --line: #2b3641; --line-soft: #1f2830;
+  --accent: #7fb2ec; --accent-soft: #15283f; --accent-ink: #0e1318; --good: #57c98a; --good-soft: #13301f; --bad: #ff8576; --bad-soft: #3a1714; --warn: #f2b65c; --warn-soft: #3a2a10; color-scheme: dark; } }
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--paper); color: var(--ink); font-family: var(--f-body); font-size: 16px; line-height: 1.45; }
+.wrap { max-width: 640px; margin: 0 auto; padding: 14px max(14px, env(safe-area-inset-right)) 48px max(14px, env(safe-area-inset-left)); display: grid; gap: 14px; }
+header { display: flex; align-items: center; gap: 12px; }
+header img { height: 64px; width: auto; background: #fff; border-radius: 6px; }
+header h1 { font-family: var(--f-display); font-size: 1.45rem; margin: 0; line-height: 1.1; }
+header .eyebrow { font-family: var(--f-display); font-size: .75rem; letter-spacing: .12em; text-transform: uppercase; color: var(--brand-red); font-weight: 700; }
+.acct { margin-left: auto; display: grid; justify-items: end; gap: 2px; font-size: .85rem; }
+.acct a, .acct button { color: var(--accent); font-weight: 600; background: none; border: 0; padding: 2px 0; font: inherit; font-weight: 600; cursor: pointer; text-decoration: underline; }
+.stripe { height: 5px; border-radius: 3px; background: linear-gradient(90deg, var(--brand-red) 0 34%, var(--brand-gold) 34% 50%, var(--brand-blue) 50% 100%); }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px; display: grid; gap: 12px; }
+.row { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
+label.field { display: grid; gap: 4px; font-size: .78rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+input, select, textarea { font: inherit; color: var(--ink); background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 10px; width: 100%; min-width: 0; text-transform: none; letter-spacing: normal; }
+input[readonly] { background: var(--line-soft); font-weight: 600; }
+input:disabled, textarea:disabled { background: var(--line-soft); opacity: 1; }
+textarea { min-height: 60px; resize: vertical; }
+input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.hint { font-size: .88rem; color: var(--muted); margin: 0; }
+table { width: 100%; border-collapse: collapse; }
+.slip { border: 1.5px solid var(--ink); border-radius: 4px; overflow: hidden; }
+.slip th, .slip td { border-bottom: 1px solid var(--line); padding: 6px 8px; text-align: left; }
+.slip thead th { font-family: var(--f-display); font-size: .74rem; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); background: var(--line-soft); }
+.slip td.den { font-family: var(--f-num); font-weight: 600; white-space: nowrap; width: 30%; }
+.slip td.den small { font-family: var(--f-body); font-weight: 500; color: var(--muted); font-size: .7rem; text-transform: uppercase; margin-right: 4px; }
+.slip td.qty { width: 30%; }
+.slip td.amt { text-align: right; font-family: var(--f-num); color: var(--accent); font-size: .82rem; }
+.slip tr.group td { background: var(--line-soft); font-family: var(--f-display); font-weight: 700; text-transform: uppercase; letter-spacing: .1em; font-size: .72rem; color: var(--muted); padding: 4px 8px; }
+.slip tr.sub td { font-weight: 600; background: var(--line-soft); }
+.slip tr.sub td.amt { color: var(--ink); font-size: .95rem; }
+.slip input { font-family: var(--f-num); color: var(--accent); font-weight: 600; text-align: right; padding: 8px; font-size: 1.05rem; }
+.tot { display: flex; justify-content: space-between; padding-block: 4px; border-bottom: 1px dashed var(--line); }
+.tot span:last-child { font-family: var(--f-num); }
+.grand { background: var(--accent-soft); border: 1.5px solid var(--accent); border-radius: 10px; padding: 12px 14px; display: flex; justify-content: space-between; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.grand b { font-family: var(--f-display); text-transform: uppercase; letter-spacing: .07em; }
+.grand span { font-family: var(--f-num); font-size: 1.6rem; font-weight: 600; color: var(--accent); }
+button { font: inherit; font-weight: 600; border-radius: 10px; padding: 12px 16px; border: 1px solid var(--line); background: var(--card); color: var(--ink); cursor: pointer; }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-size: 1.05rem; padding: 14px 16px; }
+button:disabled { opacity: .5; cursor: default; }
+.btns { display: grid; gap: 8px; }
+.status { min-height: 1.4em; font-size: .95rem; font-weight: 600; }
+.status.ok { color: var(--good); } .status.err { color: var(--bad); }
+.estado { border-radius: 10px; padding: 10px 12px; font-size: .95rem; border: 1px solid var(--line); background: var(--card); }
+.estado.ok { border-color: var(--good); background: var(--good-soft); color: var(--good); }
+.estado.lock { border-color: var(--accent); background: var(--accent-soft); }
+.estado.warn { border-color: var(--warn); background: var(--warn-soft); color: var(--warn); }
+.hist { display: grid; gap: 6px; }
+.hist button { display: flex; justify-content: space-between; gap: 10px; text-align: left; font-weight: 500; padding: 9px 12px; }
+.hist button span:last-child { font-family: var(--f-num); }
+.hist .sel { border-color: var(--accent); background: var(--accent-soft); }
+.pill { font-size: .72rem; font-weight: 600; padding: 1px 8px; border-radius: 999px; margin-left: 6px; background: var(--good-soft); color: var(--good); }
+h2 { font-family: var(--f-display); font-size: 1.05rem; margin: 0; }
+[hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <img src="/logo.png" alt="Tasty Choice">
+    <div><div class="eyebrow">Desglose de dinero</div><h1>Recibo del chofer</h1></div>
+    <div class="acct"><a href="/cuenta">Cambiar mi clave</a><button type="button" id="logout">Salir</button></div>
+  </header>
+  <div class="stripe" aria-hidden="true"></div>
+
+  <div class="card">
+    <div class="row">
+      <label class="field">Fecha de entrega<input type="date" id="f-fecha"></label>
+      <label class="field">Venta del<input type="date" id="f-fventa"></label>
+    </div>
+    <div class="row">
+      <label class="field">Conductor<input type="text" id="f-chofer" readonly></label>
+      <label class="field">Ruta / camión<input type="text" id="f-ruta" autocomplete="off" placeholder="Ej. Colón 01 · CAM 88"></label>
+    </div>
+    <div class="estado" id="estado" role="status">Cargando…</div>
+  </div>
+
+  <div class="card">
+    <p class="hint">Solo escribe <b>cuántos</b> billetes o monedas tienes de cada uno. Ejemplo: 200 monedas de 0.25 → el sistema calcula $50.00 y suma todo.</p>
+    <div class="slip"><table>
+      <thead><tr><th>Denominación</th><th>Cuántas piezas</th><th style="text-align:right">Monto</th></tr></thead>
+      <tbody id="slip"></tbody>
+    </table></div>
+  </div>
+
+  <div class="card">
+    <div class="row">
+      <label class="field">ACH ($)<input type="number" inputmode="decimal" step="0.01" min="0" id="f-ach" placeholder="0.00"></label>
+      <label class="field">Yappy ($)<input type="number" inputmode="decimal" step="0.01" min="0" id="f-yappy" placeholder="0.00"></label>
+      <label class="field">Cheque ($)<input type="number" inputmode="decimal" step="0.01" min="0" id="f-cheque" placeholder="0.00"></label>
+    </div>
+    <label class="field">Referencias / Nº de cheque<input type="text" id="f-refs" autocomplete="off" placeholder="Ej. Cheque 004512 Banco General"></label>
+    <label class="field">Observaciones<textarea id="f-notas" placeholder="Créditos, faltantes, merma…"></textarea></label>
+    <div>
+      <div class="tot"><span>Billetes</span><span id="t-bill">$0.00</span></div>
+      <div class="tot"><span>Monedas</span><span id="t-mon">$0.00</span></div>
+      <div class="tot"><span>Total efectivo</span><span id="t-efec">$0.00</span></div>
+      <div class="tot"><span>ACH + Yappy + Cheque</span><span id="t-otros">$0.00</span></div>
+    </div>
+    <div class="grand"><b>Total entregado</b><span id="t-total">$0.00</span></div>
+  </div>
+
+  <div class="card">
+    <div class="btns">
+      <button class="primary" id="btn-save">Guardar recibo</button>
+      <button id="btn-copy">Copiar resumen en texto</button>
+      <button id="btn-clear">Borrar el conteo</button>
+    </div>
+    <div class="status" id="status" role="status"></div>
+  </div>
+
+  <div class="card">
+    <h2>Mis últimos recibos</h2>
+    <div class="hist" id="hist"><p class="hint">Cargando…</p></div>
+  </div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+  var DENOMS = [
+    { k: "b100", label: "100.00", cents: 10000, tipo: "Billetes" }, { k: "b50", label: "50.00", cents: 5000, tipo: "Billetes" },
+    { k: "b20", label: "20.00", cents: 2000, tipo: "Billetes" }, { k: "b10", label: "10.00", cents: 1000, tipo: "Billetes" },
+    { k: "b5", label: "5.00", cents: 500, tipo: "Billetes" }, { k: "b1", label: "1.00", cents: 100, tipo: "Billetes" },
+    { k: "m100", label: "1.00", cents: 100, tipo: "Monedas" }, { k: "m50", label: "0.50", cents: 50, tipo: "Monedas" },
+    { k: "m25", label: "0.25", cents: 25, tipo: "Monedas" }, { k: "m10", label: "0.10", cents: 10, tipo: "Monedas" },
+    { k: "m5", label: "0.05", cents: 5, tipo: "Monedas" }, { k: "m1", label: "0.01", cents: 1, tipo: "Monedas" }
+  ];
+  var $ = function (id) { return document.getElementById(id); };
+  var fmt = function (c) { return (c < 0 ? "-$" : "$") + (Math.abs(c) / 100).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }); };
+  var toCents = function (v) { var n = parseFloat(v); return isFinite(n) && n > 0 ? Math.round(n * 100) : 0; };
+  var today = function () { return new Date().toLocaleDateString("en-CA", { timeZone: "America/Panama" }); };
+  var prevDay = function (d) { var x = new Date(d + "T12:00:00"); x.setDate(x.getDate() - 1); return x.toLocaleDateString("en-CA"); };
+  var longDate = function (d) { return d ? new Date(d + "T12:00:00").toLocaleDateString("es-PA", { day: "numeric", month: "long", year: "numeric" }) : ""; };
+  var when = function (iso) { return iso ? new Date(iso).toLocaleString("es-PA", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit", timeZone: "America/Panama" }) : ""; };
+  var store = { get: function (k) { try { return localStorage.getItem(k); } catch (e) { return null; } }, set: function (k, v) { try { localStorage.setItem(k, v); } catch (e) {} }, del: function (k) { try { localStorage.removeItem(k); } catch (e) {} } };
+
+  var ME = null, SAVED = null, DRAFT = "", dirty = false;
+
+  function api(method, url, body) {
+    return fetch(url, { method: method, credentials: "same-origin", headers: body !== undefined ? { "Content-Type": "application/json" } : {}, body: body !== undefined ? JSON.stringify(body) : undefined })
+      .then(function (r) {
+        if (r.status === 401) { location.replace("/login?next=/chofer"); throw new Error("Tu sesión terminó."); }
+        return r.json().catch(function () { return {}; }).then(function (j) { if (!r.ok) throw new Error(j.error || "Error " + r.status); return j; });
+      }, function () { throw new Error("Sin conexión. Revisa el internet e intenta de nuevo. Tu conteo sigue guardado en este teléfono."); });
+  }
+
+  var slip = $("slip"), last = null;
+  DENOMS.forEach(function (d) {
+    if (d.tipo !== last) { slip.insertAdjacentHTML("beforeend", '<tr class="group"><td colspan="3">' + (d.tipo === "Billetes" ? "Billetes" : "Moneda") + "</td></tr>"); last = d.tipo; }
+    slip.insertAdjacentHTML("beforeend", '<tr><td class="den"><small>' + (d.tipo === "Billetes" ? "Billete" : "Moneda") + "</small>" + d.label + '</td><td class="qty"><input type="number" inputmode="numeric" pattern="[0-9]*" min="0" step="1" placeholder="0" id="q-' + d.k + '" aria-label="' + d.tipo + " de " + d.label + '"></td><td class="amt" id="a-' + d.k + '">—</td></tr>');
+  });
+  slip.insertAdjacentHTML("beforeend", '<tr class="sub"><td colspan="2">Total efectivo</td><td class="amt" id="a-total">$0.00</td></tr>');
+
+  function read() {
+    var conteo = {};
+    DENOMS.forEach(function (d) { var n = parseInt($("q-" + d.k).value, 10); conteo[d.k] = isFinite(n) && n > 0 ? n : 0; });
+    return {
+      fecha: $("f-fecha").value, fechaVenta: $("f-fventa").value, ruta: $("f-ruta").value.trim(),
+      conteo: conteo, ach: toCents($("f-ach").value), yappy: toCents($("f-yappy").value), cheque: toCents($("f-cheque").value),
+      refs: $("f-refs").value.trim(), notas: $("f-notas").value.trim()
+    };
+  }
+  function sums(r) {
+    var bill = 0, mon = 0;
+    DENOMS.forEach(function (d) { var v = (r.conteo[d.k] || 0) * d.cents; if (d.tipo === "Billetes") bill += v; else mon += v; });
+    var otros = r.ach + r.yappy + r.cheque;
+    return { bill: bill, mon: mon, efec: bill + mon, otros: otros, total: bill + mon + otros };
+  }
+  function calc(save) {
+    var r = read(), s = sums(r);
+    DENOMS.forEach(function (d) { var n = r.conteo[d.k]; $("a-" + d.k).textContent = n ? n + " × " + d.label + " = " + fmt(n * d.cents) : "—"; });
+    $("a-total").textContent = fmt(s.efec);
+    $("t-bill").textContent = fmt(s.bill); $("t-mon").textContent = fmt(s.mon); $("t-efec").textContent = fmt(s.efec);
+    $("t-otros").textContent = fmt(s.otros); $("t-total").textContent = fmt(s.total);
+    if (save) { dirty = true; store.set(DRAFT, JSON.stringify(r)); estado(); }
+    return { r: r, s: s };
+  }
+  function fill(r, fecha) {
+    DENOMS.forEach(function (d) { $("q-" + d.k).value = r && r.conteo && r.conteo[d.k] ? r.conteo[d.k] : ""; });
+    ["ach", "yappy", "cheque"].forEach(function (k) { $("f-" + k).value = r && r[k] ? (r[k] / 100).toFixed(2) : ""; });
+    $("f-refs").value = (r && r.refs) || ""; $("f-notas").value = (r && r.notas) || "";
+    $("f-fecha").value = fecha;
+    $("f-fventa").value = (r && r.fechaVenta) || prevDay(fecha);
+    $("f-ruta").value = (r && r.ruta) || ME.chofer.ruta || "";
+    calc(false);
+  }
+  var status = function (m, cls) { $("status").textContent = m; $("status").className = "status " + (cls || ""); };
+
+  function locked() { return !!(SAVED && SAVED.verificado); }
+  function estado() {
+    var e = $("estado"), lock = locked();
+    document.querySelectorAll(".wrap input:not([readonly]), .wrap textarea").forEach(function (i) { i.disabled = lock && i.id !== "f-fecha"; });
+    $("btn-save").disabled = lock; $("btn-clear").disabled = lock;
+    if (lock) { e.className = "estado lock"; e.textContent = "✔ Verificado por la oficina" + (SAVED.verificadoPor ? " (" + SAVED.verificadoPor + ")" : "") + ". Ya no se puede cambiar. Si hay un error, avísale a la oficina."; }
+    else if (SAVED && !dirty) { e.className = "estado ok"; e.textContent = "✔ Recibo guardado (" + when(SAVED.actualizado) + "). La oficina ya lo puede ver. Puedes corregirlo hasta que la oficina lo verifique."; }
+    else if (SAVED) { e.className = "estado warn"; e.textContent = "Tienes cambios sin guardar. Toca \"Guardar recibo\" para que la oficina vea la corrección."; }
+    else if (dirty) { e.className = "estado warn"; e.textContent = "Todavía no has guardado el recibo del " + longDate($("f-fecha").value) + "."; }
+    else { e.className = "estado"; e.textContent = "No hay recibo guardado para el " + longDate($("f-fecha").value) + "."; }
+  }
+
+  function draftKey(f) { return "tasty.recibo.borrador." + ME.id + "." + f; }
+  function cargarFecha(f) {
+    DRAFT = draftKey(f); status("");
+    return api("GET", "/api/recibos/mio?fecha=" + encodeURIComponent(f)).then(function (j) {
+      SAVED = j.recibo; var d = null;
+      try { d = JSON.parse(store.get(DRAFT) || "null"); } catch (e) {}
+      if (d && SAVED && !SAVED.verificado && new Date(SAVED.actualizado) < new Date(d.cuando || 0)) { fill(d, f); dirty = true; }
+      else if (SAVED) { fill(SAVED, f); dirty = false; store.del(DRAFT); }
+      else if (d) { fill(d, f); dirty = true; }
+      else { fill(null, f); dirty = false; }
+      estado(); marcarHist();
+    }).catch(function (e) { status(e.message, "err"); });
+  }
+
+  document.querySelectorAll("input, textarea").forEach(function (i) {
+    if (i.id === "f-fecha") return;
+    i.addEventListener("input", function () { var x = calc(false); x.r.cuando = new Date().toISOString(); dirty = true; store.set(DRAFT, JSON.stringify(x.r)); estado(); });
+  });
+  $("f-fecha").addEventListener("change", function () {
+    var f = $("f-fecha").value || today();
+    if (f > today()) { status("La fecha de entrega no puede ser futura.", "err"); f = today(); }
+    cargarFecha(f);
+  });
+
+  $("btn-save").addEventListener("click", function () {
+    var x = calc(false);
+    if (!x.r.fecha) { status("Escribe la fecha de entrega.", "err"); return; }
+    if (x.s.total === 0) { status("El recibo está en cero. Escribe al menos una cantidad.", "err"); return; }
+    var b = $("btn-save"); b.disabled = true; b.textContent = "Guardando…";
+    api("PUT", "/api/recibos/mio", x.r).then(function (j) {
+      SAVED = j.recibo; dirty = false; store.del(DRAFT);
+      fill(SAVED, SAVED.fecha); estado();
+      status("Recibo guardado: " + fmt(SAVED.total) + ". La oficina ya lo puede ver.", "ok");
+      cargarHist();
+    }).catch(function (e) { status(e.message, "err"); }).then(function () { b.textContent = "Guardar recibo"; estado(); });
+  });
+  function resumen(r, s) {
+    var lines = ["RECIBO DE DINERO · TASTY CHOICE", "Chofer: " + ME.chofer.nombre, "Ruta: " + (r.ruta || "-"), "Fecha entrega: " + r.fecha + " (venta del " + r.fechaVenta + ")", ""];
+    DENOMS.forEach(function (d) { var n = r.conteo[d.k]; if (n) lines.push((d.tipo === "Billetes" ? "Billete " : "Moneda ") + d.label + ": " + n + " = " + fmt(n * d.cents)); });
+    lines.push("", "Efectivo: " + fmt(s.efec));
+    if (r.ach) lines.push("ACH: " + fmt(r.ach)); if (r.yappy) lines.push("Yappy: " + fmt(r.yappy)); if (r.cheque) lines.push("Cheque: " + fmt(r.cheque));
+    lines.push("TOTAL ENTREGADO: " + fmt(s.total));
+    if (r.refs) lines.push("Referencias: " + r.refs); if (r.notas) lines.push("Obs.: " + r.notas);
+    return lines.join("\n");
+  }
+  $("btn-copy").addEventListener("click", function () {
+    var x = calc(false), t = resumen(x.r, x.s);
+    (navigator.clipboard ? navigator.clipboard.writeText(t) : Promise.reject()).then(function () { status("Resumen copiado.", "ok"); }, function () { status("No se pudo copiar automáticamente.", "err"); });
+  });
+  var clearArm = false;
+  $("btn-clear").addEventListener("click", function () {
+    if (!clearArm) { clearArm = true; $("btn-clear").textContent = "Toca otra vez para borrar el conteo"; setTimeout(function () { clearArm = false; $("btn-clear").textContent = "Borrar el conteo"; }, 4000); return; }
+    clearArm = false; $("btn-clear").textContent = "Borrar el conteo";
+    var f = $("f-fecha").value; fill(null, f); store.del(DRAFT); dirty = !!SAVED; estado();
+    status(SAVED ? "Conteo en blanco. Lo guardado no cambia hasta que toques \"Guardar recibo\"." : "Conteo en blanco.");
+  });
+  $("logout").addEventListener("click", function () { api("POST", "/api/logout", {}).catch(function () {}).then(function () { location.replace("/login"); }); });
+
+  var HIST = [];
+  function marcarHist() { document.querySelectorAll("#hist button").forEach(function (b) { b.classList.toggle("sel", b.dataset.f === $("f-fecha").value); }); }
+  function cargarHist() {
+    api("GET", "/api/recibos/mios").then(function (j) {
+      HIST = j.recibos; var h = $("hist"); h.innerHTML = "";
+      if (!HIST.length) { h.innerHTML = '<p class="hint">Todavía no tienes recibos guardados.</p>'; return; }
+      HIST.forEach(function (r) {
+        var b = document.createElement("button"); b.type = "button"; b.dataset.f = r.fecha;
+        var a = document.createElement("span"); a.textContent = longDate(r.fecha);
+        if (r.verificado) { var p = document.createElement("span"); p.className = "pill"; p.textContent = "Verificado"; a.appendChild(p); }
+        var t = document.createElement("span"); t.textContent = fmt(r.total);
+        b.appendChild(a); b.appendChild(t);
+        b.addEventListener("click", function () { cargarFecha(r.fecha); window.scrollTo({ top: 0, behavior: "smooth" }); });
+        h.appendChild(b);
+      });
+      marcarHist();
+    }).catch(function () {});
+  }
+
+  api("GET", "/api/yo").then(function (u) {
+    if (u.rol !== "chofer" || !u.chofer) { location.replace("/"); return; }
+    ME = u;
+    $("f-chofer").value = u.chofer.nombre;
+    $("f-fecha").max = today();
+    cargarFecha(today()); cargarHist();
+  }).catch(function (e) { status(e.message, "err"); });
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,82 @@
+# Caja de Choferes · Tasty Choice (versión web para Railway)
+
+Un solo enlace para todos. Cada persona entra con **usuario y clave** propios (sin Google, Microsoft ni Claude):
+
+| Quién | Entra a | Qué ve |
+|---|---|---|
+| Chofer | `/chofer` | Solo su recibo, con su nombre fijo. Guarda directo en el sistema y ve "guardado" o "verificado por la oficina". |
+| Gerente administrativo | `/portal` | Todo, más **Lista de choferes**, **Usuarios**, importar y respaldo. |
+| Asistente | `/portal` | Panel, Choferes, Cierre, Gráficas, Presentación e Historial. Escribe venta y cierre, verifica y exporta Excel. |
+| Consulta (gerente general) | `/portal` | Gráficas, movimiento diario y Presentación, solo lectura. |
+
+## Archivos
+
+```
+server.js          arranque: sesiones, páginas, /health
+src/db.js          conexión a PostgreSQL, tablas (se crean solas) y lista inicial de choferes
+src/auth.js        inicio de sesión, bcrypt, bloqueo tras 5 intentos (15 min), primer gerente
+src/api.js         toda la API con los permisos de cada rol
+src/recibos.js     guardar recibos; cada reemplazo o eliminación deja copia en recibo_versiones
+src/importar.js    importa los .json de los choferes y los respaldos del portal offline
+src/calc.js        denominaciones y sumas en centavos (los totales siempre se recalculan en el servidor)
+views/             login, chofer, portal (gerencia) y cuenta (cambiar clave)
+public/logo.png    logo oficial sin modificar
+```
+
+## Desplegar en Railway (paso a paso)
+
+1. **Subir el código a GitHub.** Crea un repositorio privado (por ejemplo `caja-choferes`) y sube **el contenido de esta carpeta `railway/`** (que `package.json` quede en la raíz del repositorio).
+   ```bash
+   git init
+   git add .
+   git commit -m "Caja de Choferes web"
+   git branch -M main
+   git remote add origin https://github.com/<tu-cuenta>/caja-choferes.git
+   git push -u origin main
+   ```
+2. **Crear el proyecto en Railway:** New Project → *Deploy from GitHub repo* → elige el repositorio.
+3. **Agregar la base de datos:** en el proyecto, *+ New* → *Database* → *PostgreSQL*.
+4. **Variables del servicio web** (pestaña *Variables* del servicio, no de la base):
+   | Variable | Valor |
+   |---|---|
+   | `DATABASE_URL` | `${{Postgres.DATABASE_URL}}` (referencia a la base) |
+   | `SESSION_SECRET` | texto aleatorio largo (64 caracteres o más) |
+   | `ADMIN_USER` | usuario del primer gerente, por ejemplo `aneliz` |
+   | `ADMIN_PASSWORD` | clave inicial del gerente (mínimo 6 caracteres) |
+   | `TZ` | `America/Panama` |
+   | `NODE_ENV` | `production` |
+5. **Health check:** en *Settings* → *Deploy* → *Healthcheck Path* = `/health`.
+6. **Dominio:** *Settings* → *Networking* → *Generate Domain* (queda `algo.up.railway.app`) o agrega un dominio propio.
+7. Abre el enlace, entra con `ADMIN_USER` / `ADMIN_PASSWORD`, ve a **Cambiar mi clave**, y después **borra `ADMIN_PASSWORD`** de las variables (solo se usa cuando no hay ningún usuario).
+8. **Respaldos:** en el servicio de PostgreSQL activa *Backups*. Además, el portal tiene **Respaldo → Descargar respaldo completo** (JSON).
+
+Las tablas y la lista inicial de 13 choferes se crean solas al primer arranque. Cada despliegue nuevo vuelve a revisar las tablas sin borrar nada.
+
+## Primer uso
+
+1. **Lista de choferes:** revisa nombres, rutas y quién es Food Services. Guarda.
+2. **Usuarios → Nuevo usuario:** elige *Chofer*, el chofer, y el sistema sugiere el usuario (ej. `carlos.perez`). Al crear, aparece la clave **una sola vez** con un botón para copiar el mensaje y enviarlo por WhatsApp. Crea también las asistentes y el usuario *Consulta* del gerente general.
+3. Si alguien olvida su clave o queda bloqueado: **Usuarios → Generar clave nueva**.
+4. **Pasar los datos de la versión offline:** en el portal offline, *Respaldo → Descargar respaldo completo*; en la web, *Respaldo → Cargar respaldo*. También se pueden subir los `.json` sueltos de los choferes en *Historial e importar*.
+
+## Probar en una computadora (opcional)
+
+Requiere Node.js 20 y PostgreSQL.
+
+```bash
+npm install
+```
+```bash
+DATABASE_URL=postgres://usuario:clave@localhost:5432/caja ADMIN_USER=gerente ADMIN_PASSWORD=prueba123 npm start
+```
+Luego abre http://localhost:3000.
+
+## Reglas que respeta el servidor
+
+- Para un chofer, el chofer del recibo sale **siempre de su usuario**; no puede registrar a nombre de otro.
+- Un recibo **verificado** ya no lo puede cambiar el chofer.
+- Corregir, reemplazar, importar encima o eliminar un recibo guarda la versión anterior (*Historial e importar → Versiones guardadas aparte*, con botón Restaurar).
+- Los choferes con recibos no se borran de la lista: quedan inactivos.
+- Montos en centavos enteros; totales recalculados en el servidor.
+- Sesión con cookie `httpOnly`, `secure` y `sameSite=lax`, de 12 horas. Toda escritura debe ser JSON (protección contra envíos desde otros sitios).
+- Fechas "de hoy" en hora de Panamá.
