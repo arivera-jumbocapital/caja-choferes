@@ -17,7 +17,7 @@ function out(r) {
     conteo: r.conteo, ach: r.ach_c, yappy: r.yappy_c, cheque: r.cheque_c, efectivo: r.efectivo_c, total: r.total_c,
     refs: r.refs, notas: r.notas, guardado: r.guardado, recibido: r.creado, actualizado: r.actualizado,
     verificado: r.verificado, verificadoPor: r.verificado_por_nombre || null, verificadoEl: r.verificado_el,
-    enviadoPor: r.enviado_por_nombre || null, origen: r.origen, alterado: r.alterado,
+    enviadoPor: r.enviado_por_nombre || null, origen: r.origen, alterado: r.alterado, correcciones: r.correcciones || 0,
   };
 }
 
@@ -51,15 +51,16 @@ async function escribir(c, d, opts) {
   const prev = await porFechaChofer(c, d.fecha, d.choferId, true);
   if (prev) await guardarVersion(c, prev, opts.motivo || "Reemplazado", opts.usuarioId);
   const params = [d.fecha, d.fechaVenta, d.choferId, d.ruta, JSON.stringify(d.conteo), d.ach, d.yappy, d.cheque, d.efectivo, d.total,
-    d.refs, d.notas, opts.usuarioId || null, opts.origen || "chofer", !!opts.alterado, opts.guardado || new Date().toISOString(), !!opts.verificado];
+    d.refs, d.notas, opts.usuarioId || null, opts.origen || "chofer", !!opts.alterado, opts.guardado || new Date().toISOString(), !!opts.verificado,
+    opts.correcciones || 0];
   const { rows } = await c.query(`
-    INSERT INTO recibos (fecha, fecha_venta, chofer_id, ruta, conteo, ach_c, yappy_c, cheque_c, efectivo_c, total_c, refs, notas, enviado_por, origen, alterado, guardado, verificado)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+    INSERT INTO recibos (fecha, fecha_venta, chofer_id, ruta, conteo, ach_c, yappy_c, cheque_c, efectivo_c, total_c, refs, notas, enviado_por, origen, alterado, guardado, verificado, correcciones)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
     ON CONFLICT (fecha, chofer_id) DO UPDATE SET
       fecha_venta = EXCLUDED.fecha_venta, ruta = EXCLUDED.ruta, conteo = EXCLUDED.conteo, ach_c = EXCLUDED.ach_c, yappy_c = EXCLUDED.yappy_c,
       cheque_c = EXCLUDED.cheque_c, efectivo_c = EXCLUDED.efectivo_c, total_c = EXCLUDED.total_c, refs = EXCLUDED.refs, notas = EXCLUDED.notas,
       enviado_por = EXCLUDED.enviado_por, origen = EXCLUDED.origen, alterado = EXCLUDED.alterado, guardado = EXCLUDED.guardado,
-      verificado = EXCLUDED.verificado, verificado_por = NULL, verificado_el = NULL, actualizado = now()
+      verificado = EXCLUDED.verificado, verificado_por = NULL, verificado_el = NULL, correcciones = EXCLUDED.correcciones, actualizado = now()
     RETURNING id`, params);
   return { id: rows[0].id, prev };
 }

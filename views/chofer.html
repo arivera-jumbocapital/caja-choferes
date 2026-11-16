@@ -124,6 +124,7 @@ h2 { font-family: var(--f-display); font-size: 1.05rem; margin: 0; }
   <div class="card">
     <div class="btns">
       <button class="primary" id="btn-save">Guardar recibo</button>
+      <button id="btn-down" disabled>Descargar mi recibo</button>
       <button id="btn-copy">Copiar resumen en texto</button>
       <button id="btn-clear">Borrar el conteo</button>
     </div>
@@ -208,14 +209,17 @@ h2 { font-family: var(--f-display); font-size: 1.05rem; margin: 0; }
   }
   var status = function (m, cls) { $("status").textContent = m; $("status").className = "status " + (cls || ""); };
 
-  function locked() { return !!(SAVED && SAVED.verificado); }
+  // Se cierra si la oficina lo verificó o si el chofer ya usó su única corrección.
+  function locked() { return !!(SAVED && (SAVED.verificado || SAVED.correcciones >= 1)); }
   function estado() {
     var e = $("estado"), lock = locked();
     document.querySelectorAll(".wrap input:not([readonly]), .wrap textarea").forEach(function (i) { i.disabled = lock && i.id !== "f-fecha"; });
-    $("btn-save").disabled = lock; $("btn-clear").disabled = lock;
-    if (lock) { e.className = "estado lock"; e.textContent = "✔ Verificado por la oficina" + (SAVED.verificadoPor ? " (" + SAVED.verificadoPor + ")" : "") + ". Ya no se puede cambiar. Si hay un error, avísale a la oficina."; }
-    else if (SAVED && !dirty) { e.className = "estado ok"; e.textContent = "✔ Recibo guardado (" + when(SAVED.actualizado) + "). La oficina ya lo puede ver. Puedes corregirlo hasta que la oficina lo verifique."; }
-    else if (SAVED) { e.className = "estado warn"; e.textContent = "Tienes cambios sin guardar. Toca \"Guardar recibo\" para que la oficina vea la corrección."; }
+    $("btn-save").disabled = lock; $("btn-clear").disabled = lock; $("btn-down").disabled = !SAVED;
+    if (!saveArm) $("btn-save").textContent = SAVED ? "Guardar corrección" : "Guardar recibo";
+    if (lock && SAVED.verificado) { e.className = "estado lock"; e.textContent = "✔ Verificado por la oficina" + (SAVED.verificadoPor ? " (" + SAVED.verificadoPor + ")" : "") + ". Ya no se puede cambiar. Si hay un error, avísale a la oficina."; }
+    else if (lock) { e.className = "estado lock"; e.textContent = "🔒 Recibo cerrado: ya usaste tu única corrección (" + when(SAVED.actualizado) + "). La oficina ya lo puede ver. Si hay otro error, avísale a la oficina."; }
+    else if (SAVED && !dirty) { e.className = "estado ok"; e.textContent = "✔ Recibo guardado (" + when(SAVED.actualizado) + "). La oficina ya lo puede ver. Si te equivocaste, puedes corregirlo UNA sola vez; después queda cerrado."; }
+    else if (SAVED) { e.className = "estado warn"; e.textContent = "Tienes cambios sin guardar. Solo puedes corregir el recibo UNA vez: revisa bien antes de tocar \"Guardar corrección\"."; }
     else if (dirty) { e.className = "estado warn"; e.textContent = "Todavía no has guardado el recibo del " + longDate($("f-fecha").value) + "."; }
     else { e.className = "estado"; e.textContent = "No hay recibo guardado para el " + longDate($("f-fecha").value) + "."; }
   }
@@ -244,17 +248,76 @@ h2 { font-family: var(--f-display); font-size: 1.05rem; margin: 0; }
     cargarFecha(f);
   });
 
+  var saveArm = false, saveTimer = 0;
   $("btn-save").addEventListener("click", function () {
     var x = calc(false);
     if (!x.r.fecha) { status("Escribe la fecha de entrega.", "err"); return; }
     if (x.s.total === 0) { status("El recibo está en cero. Escribe al menos una cantidad.", "err"); return; }
-    var b = $("btn-save"); b.disabled = true; b.textContent = "Guardando…";
+    var b = $("btn-save");
+    // La corrección es única: se pide un segundo toque para confirmarla.
+    if (SAVED && dirty && !saveArm) {
+      saveArm = true; b.textContent = "Toca otra vez para confirmar tu única corrección (" + fmt(x.s.total) + ")";
+      status("Después de esta corrección el recibo queda cerrado y no podrás cambiarlo.", "err");
+      clearTimeout(saveTimer); saveTimer = setTimeout(function () { saveArm = false; estado(); }, 6000);
+      return;
+    }
+    saveArm = false; clearTimeout(saveTimer);
+    b.disabled = true; b.textContent = "Guardando…";
     api("PUT", "/api/recibos/mio", x.r).then(function (j) {
       SAVED = j.recibo; dirty = false; store.del(DRAFT);
       fill(SAVED, SAVED.fecha); estado();
-      status("Recibo guardado: " + fmt(SAVED.total) + ". La oficina ya lo puede ver.", "ok");
+      status((SAVED.correcciones ? "Corrección guardada: " : "Recibo guardado: ") + fmt(SAVED.total) + ". La oficina ya lo puede ver. Puedes descargarlo abajo.", "ok");
       cargarHist();
-    }).catch(function (e) { status(e.message, "err"); }).then(function () { b.textContent = "Guardar recibo"; estado(); });
+    }).catch(function (e) {
+      status(e.message, "err");
+      // Si el servidor dice que ya está cerrado, se vuelve a cargar lo guardado.
+      if (/cerrado|verific/.test(e.message)) cargarFecha($("f-fecha").value);
+    }).then(function () { estado(); });
+  });
+
+  /* Descarga del recibo guardado como página (se abre en el celular o se imprime / guarda en PDF). */
+  var LOGO = "";
+  fetch("/logo.png").then(function (r) { return r.blob(); }).then(function (b) { var fr = new FileReader(); fr.onload = function () { LOGO = fr.result; }; fr.readAsDataURL(b); }).catch(function () {});
+  function escH(s) { return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]; }); }
+  function reciboHtml(r) {
+    var s = sums(r), rows = "", last = "";
+    DENOMS.forEach(function (d) {
+      if (d.tipo !== last) { rows += '<tr class="g"><td colspan="3">' + (d.tipo === "Billetes" ? "Billetes" : "Moneda") + "</td></tr>"; last = d.tipo; }
+      var n = r.conteo[d.k] || 0;
+      rows += "<tr><td>" + d.label + '</td><td class="n">' + (n || "—") + '</td><td class="n">' + (n ? fmt(n * d.cents) : "—") + "</td></tr>";
+    });
+    var est = r.verificado ? "Verificado por la oficina" + (r.verificadoPor ? " (" + r.verificadoPor + ")" : "") : r.correcciones ? "Corregido una vez · cerrado" : "Guardado · pendiente de verificar";
+    return '<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">' +
+      "<title>Recibo " + escH(ME.chofer.nombre) + " " + r.fecha + "</title>" +
+      "<style>*{box-sizing:border-box}body{margin:0;background:#f2f4f7;color:#16202b;font-family:Barlow,system-ui,'Segoe UI',sans-serif;font-size:15px}" +
+      ".p{max-width:560px;margin:0 auto;padding:14px;display:grid;gap:12px}.c{background:#fff;border:1px solid #d5dce4;border-radius:12px;padding:14px}" +
+      "header{display:flex;gap:12px;align-items:center}header img{height:60px}h1{margin:0;font-size:1.3rem}.e{color:#c8141b;font-size:.75rem;font-weight:700;letter-spacing:.12em;text-transform:uppercase}" +
+      ".s{height:5px;border-radius:3px;background:linear-gradient(90deg,#c8141b 0 34%,#f2b230 34% 50%,#0a4d8f 50% 100%)}" +
+      ".kv{display:grid;grid-template-columns:auto 1fr;gap:4px 14px}.kv b{color:#5a6572;font-weight:600}" +
+      "table{width:100%;border-collapse:collapse}td,th{padding:5px 8px;border-bottom:1px solid #e9edf2;text-align:left}th{font-size:.75rem;text-transform:uppercase;color:#5a6572}" +
+      ".n{text-align:right;font-family:Consolas,monospace}tr.g td{background:#e9edf2;font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:#5a6572}" +
+      "tfoot td{font-weight:700;border-top:1.5px solid #16202b}.t{display:flex;justify-content:space-between;background:#e3edf8;border:1.5px solid #0a4d8f;border-radius:10px;padding:10px 14px;font-weight:700}" +
+      ".t span:last-child{font-family:Consolas,monospace;font-size:1.3rem;color:#0a4d8f}.m{color:#5a6572;font-size:.85rem}button{font:inherit;font-weight:600;padding:10px 16px;border-radius:8px;border:1px solid #0a4d8f;background:#0a4d8f;color:#fff}" +
+      "@media print{body{background:#fff}button{display:none}.c{border:0;padding:0}}</style></head><body><div class=\"p\">" +
+      '<header><img src="' + LOGO + '" alt="Tasty Choice"><div><div class="e">Desglose de dinero</div><h1>Recibo del chofer</h1></div></header><div class="s"></div>' +
+      '<div class="c kv"><b>Conductor</b><span>' + escH(ME.chofer.nombre) + "</span><b>Ruta / camión</b><span>" + escH(r.ruta || "—") + "</span>" +
+      "<b>Fecha de entrega</b><span>" + longDate(r.fecha) + "</span><b>Venta del</b><span>" + longDate(r.fechaVenta) + "</span>" +
+      "<b>Estado</b><span>" + escH(est) + "</span><b>Guardado</b><span>" + escH(when(r.actualizado)) + "</span></div>" +
+      '<div class="c"><table><thead><tr><th>Denominación</th><th class="n">Piezas</th><th class="n">Monto</th></tr></thead><tbody>' + rows + "</tbody>" +
+      '<tfoot><tr><td colspan="2">Total efectivo</td><td class="n">' + fmt(s.efec) + "</td></tr></tfoot></table></div>" +
+      '<div class="c kv"><b>Billetes</b><span class="n">' + fmt(s.bill) + '</span><b>Monedas</b><span class="n">' + fmt(s.mon) + "</span>" +
+      '<b>ACH</b><span class="n">' + fmt(r.ach) + '</span><b>Yappy</b><span class="n">' + fmt(r.yappy) + '</span><b>Cheque</b><span class="n">' + fmt(r.cheque) + "</span>" +
+      (r.refs ? "<b>Referencias</b><span>" + escH(r.refs) + "</span>" : "") + (r.notas ? "<b>Observaciones</b><span>" + escH(r.notas) + "</span>" : "") + "</div>" +
+      '<div class="t"><span>Total entregado</span><span>' + fmt(s.total) + "</span></div>" +
+      '<p class="m">Copia del recibo guardado en el sistema de Caja de Choferes · Tasty Choice.</p><button onclick="print()">Imprimir o guardar en PDF</button>' +
+      "</div></body></html>";
+  }
+  $("btn-down").addEventListener("click", function () {
+    if (!SAVED) { status("Primero guarda el recibo.", "err"); return; }
+    var name = "Recibo " + ME.chofer.nombre + " " + SAVED.fecha + ".html";
+    var a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([reciboHtml(SAVED)], { type: "text/html" })); a.download = name;
+    document.body.appendChild(a); a.click(); setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 2000);
+    status("Recibo descargado: " + name + (dirty ? " (es el último guardado, sin los cambios que no has guardado)." : "."), "ok");
   });
   function resumen(r, s) {
     var lines = ["RECIBO DE DINERO · TASTY CHOICE", "Chofer: " + ME.chofer.nombre, "Ruta: " + (r.ruta || "-"), "Fecha entrega: " + r.fecha + " (venta del " + r.fechaVenta + ")", ""];

@@ -120,6 +120,8 @@ CREATE TABLE IF NOT EXISTS auditoria (
   detalle jsonb NOT NULL DEFAULT '{}'::jsonb,
   cuando timestamptz NOT NULL DEFAULT now()
 );
+-- Veces que el chofer corrigió su recibo después de guardarlo (solo se permite una).
+ALTER TABLE recibos ADD COLUMN IF NOT EXISTS correcciones int NOT NULL DEFAULT 0;
 CREATE INDEX IF NOT EXISTS recibos_fecha_idx ON recibos (fecha);
 CREATE INDEX IF NOT EXISTS versiones_creado_idx ON recibo_versiones (creado DESC);
 CREATE INDEX IF NOT EXISTS auditoria_accion_idx ON auditoria (accion, cuando DESC);

@@ -96,7 +96,15 @@ api.put("/recibos/mio", A.requiere("chofer"), h(async (req, res) => {
   const r = await tx(async (c) => {
     const prev = await R.porFechaChofer(c, d.fecha, d.choferId, true);
     if (prev && prev.verificado) return { error: "La oficina ya verificó este recibo. Si hay un error, avísale a la oficina." };
-    const w = await R.escribir(c, d, { usuarioId: req.user.id, origen: "chofer", motivo: "Corregido por el chofer" });
+    if (prev) {
+      // Guardar otra vez lo mismo (por ejemplo, un doble toque) no cuenta como corrección.
+      const igual = prev.fecha_venta === d.fechaVenta && prev.ruta === d.ruta && prev.ach_c === d.ach && prev.yappy_c === d.yappy && prev.cheque_c === d.cheque &&
+        prev.refs === d.refs && prev.notas === d.notas && Object.keys(d.conteo).every((k) => (prev.conteo[k] || 0) === d.conteo[k]);
+      if (igual) return R.out(prev);
+      // Solo se permite una corrección; la segunda queda bloqueada.
+      if ((prev.correcciones || 0) >= 1) return { error: "Ya corregiste este recibo una vez y quedó cerrado. Si hay otro error, avísale a la oficina." };
+    }
+    const w = await R.escribir(c, d, { usuarioId: req.user.id, origen: "chofer", motivo: "Corregido por el chofer", correcciones: prev ? (prev.correcciones || 0) + 1 : 0 });
     await audit(c, req.user.id, prev ? "recibo_corregido" : "recibo_nuevo", { fecha: d.fecha, chofer: d.choferId, total: d.total });
     return R.out(await R.porId(c, w.id));
   });

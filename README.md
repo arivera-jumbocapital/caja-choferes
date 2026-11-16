@@ -4,7 +4,7 @@ Un solo enlace para todos. Cada persona entra con **usuario y clave** propios (s
 
 | Quién | Entra a | Qué ve |
 |---|---|---|
-| Chofer | `/chofer` | Solo su recibo, con su nombre fijo. Guarda directo en el sistema y ve "guardado" o "verificado por la oficina". |
+| Chofer | `/chofer` | Solo su recibo, con su nombre fijo. Guarda directo en el sistema, puede **corregirlo una sola vez** y **descargarlo** como página (para guardar, imprimir o PDF). |
 | Gerente administrativo | `/portal` | Todo, más **Lista de choferes**, **Usuarios**, importar y respaldo. |
 | Asistente | `/portal` | Panel, Choferes, Cierre, Gráficas, Presentación e Historial. Escribe venta y cierre, verifica y exporta Excel. |
 | Consulta (gerente general) | `/portal` | Gráficas, movimiento diario y Presentación, solo lectura. |
@@ -74,6 +74,8 @@ Luego abre http://localhost:3000.
 ## Reglas que respeta el servidor
 
 - Para un chofer, el chofer del recibo sale **siempre de su usuario**; no puede registrar a nombre de otro.
+- El chofer puede **corregir su recibo una sola vez** (se le pide confirmar con un segundo toque). Al segundo intento el servidor lo rechaza y el recibo queda cerrado. Guardar exactamente lo mismo no cuenta como corrección. En el Panel aparece la etiqueta "Corregido 1 vez".
+- Si hace falta darle otra oportunidad, la oficina puede eliminar el recibo (queda copia en Historial) para que el chofer lo registre de nuevo.
 - Un recibo **verificado** ya no lo puede cambiar el chofer.
 - Corregir, reemplazar, importar encima o eliminar un recibo guarda la versión anterior (*Historial e importar → Versiones guardadas aparte*, con botón Restaurar).
 - Los choferes con recibos no se borran de la lista: quedan inactivos.
