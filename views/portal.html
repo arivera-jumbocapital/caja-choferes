@@ -180,7 +180,7 @@ details.day .scroll { padding: 6px 10px 10px; }
       <label class="field">Fecha de entrega<input type="date" id="p-fecha"></label>
       <label class="field">Venta del<input type="text" id="p-fventa" readonly></label>
     </div>
-    <div class="btns"><button class="primary" id="btn-excel">Descargar reporte Excel</button></div>
+    <div class="btns"><button id="btn-sap" title="Vuelve a leer la facturación de SAP y actualiza la venta de los choferes">Actualizar SAP</button><button class="primary" id="btn-excel">Descargar reporte Excel</button></div>
     <div class="chips" id="date-chips" style="flex-basis:100%"></div>
   </div>
   <div class="bar" id="periodbar" hidden>
@@ -758,16 +758,27 @@ details.day .scroll { padding: 6px 10px 10px; }
   /* ---------- facturación SAP (automática) ---------- */
   // Al abrir un día, el servidor lee SAP (día de venta: el anterior; el lunes toma el sábado) y llena la venta de cada chofer.
   let SAPINFO = null;
-  async function syncSap(f) {
+  async function syncSap(f, forzar) {
     if (!can.oficina) return;
     try {
-      const j = await api("POST", "/api/sap/sincronizar", { fecha: f });
-      if (S.pFecha !== f) return;
+      const j = await api("POST", "/api/sap/sincronizar", { fecha: f, forzar: !!forzar });
+      if (S.pFecha !== f) return j;
       SAPINFO = j;
       if (j.cambios) await fetchDia(f);
       if (S.pFecha === f) { load(); renderAll(); }
-    } catch (e) { if (S.pFecha === f) { SAPINFO = { error: e.message }; renderAll(); } }
+      return j;
+    } catch (e) { if (S.pFecha === f) { SAPINFO = { error: e.message }; renderAll(); } return SAPINFO; }
   }
+  // Botón "Actualizar SAP": vuelve a leer SAP ahora mismo (sin esperar los 15 minutos).
+  $("btn-sap").addEventListener("click", async () => {
+    const b = $("btn-sap"); b.disabled = true; b.textContent = "Actualizando SAP…"; pStatus("Leyendo SAP…");
+    const j = await syncSap(S.pFecha, true);
+    b.disabled = false; b.textContent = "Actualizar SAP";
+    if (!j) return;
+    if (j.configurado === false) pStatus("La conexión con SAP no está configurada en el servidor (variables MSSQL_*).", "err");
+    else if (j.error) pStatus(j.error + " Intenta de nuevo en unos minutos.", "err");
+    else pStatus("SAP actualizado" + (j.consultado ? " (leído " + when(j.consultado) + ")" : "") + ": venta del " + longDate(j.fechaVenta) + (j.cambios ? " · " + j.cambios + " venta(s) cambiaron" : " · sin cambios") + ".", "ok");
+  });
   function sapSub(T) {
     const I = SAPINFO;
     if (!I) return "Venta del " + longDate(prevDay(S.pFecha));
@@ -1345,7 +1356,7 @@ document.addEventListener('keydown',function(e){if(['ArrowRight','PageDown',' ',
     $("me").textContent = (ME.nombre || ME.usuario) + " · " + ({ gerente: "Gerente", asistente: "Asistente", consulta: "Consulta" }[ME.rol] || ME.rol);
     document.querySelectorAll("#tabs a").forEach((a) => { a.hidden = !allowedViews().includes(a.dataset.view); });
     $("import-panel").hidden = !can.gerente;
-    $("btn-excel").hidden = !can.oficina;
+    $("btn-excel").hidden = !can.oficina; $("btn-sap").hidden = !can.oficina;
     $("deck-title").readOnly = !can.oficina;
     try { await Promise.all([fetchChoferes(), fetchFechas(), loadPresentacion()]); } catch (e) { pStatus(e.message, "err"); }
     draft = DB.choferes.map((c) => ({ ...c }));

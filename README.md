@@ -80,7 +80,7 @@ Al abrir un día en el **Panel**, el portal lee SAP (facturas y notas de crédit
 - **Día de venta:** el día anterior a la entrega; la entrega del **lunes** toma el **sábado**.
 - Cada camión de SAP (`U_CodVehiculo`, p. ej. `CAM-90`, `PE-PTL-02`) se relaciona con un chofer por el campo **Camión SAP** de la *Lista de choferes*, la ruta de su recibo del día o su ruta en la lista. Si no queda claro (dos choferes con el mismo camión), la tarjeta avisa "Sin chofer: …".
 - Una venta **escrita a mano no se reemplaza**. Si se borra, vuelve la de SAP.
-- SAP se lee como máximo cada 15 minutos por día; pasados 2 días la cifra queda fija.
+- SAP se lee como máximo cada 15 minutos por día; pasados 2 días la cifra queda fija. El botón **Actualizar SAP** (junto a Descargar reporte Excel) lo vuelve a leer en el momento (mínimo 1 minuto entre lecturas).
 
 ## Reglas que respeta el servidor
 

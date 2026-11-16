@@ -203,11 +203,12 @@ function choferDeCamion(cam, choferes, recibos) {
   return c.length && (c.length === 1 || c[0].p > c[1].p) ? c[0].id : null;
 }
 const sinDatos = new Map(); // fecha de venta → hora de la última consulta que no trajo nada
-async function leerSap(fv, usuarioId) {
+// forzar (botón "Actualizar SAP"): vuelve a leer aunque el día esté cerrado, con un mínimo de 1 minuto entre lecturas.
+async function leerSap(fv, usuarioId, forzar) {
   const { rows } = await q("SELECT * FROM sap_facturacion WHERE fecha_venta = $1", [fv]);
   const ultima = rows[0] ? new Date(rows[0].consultado).getTime() : sinDatos.get(fv) || 0;
   const cerrado = ultima > new Date(fv + "T00:00:00-05:00").getTime() + 2 * 864e5; // leído 2 días después: ya no cambia
-  if ((rows.length && cerrado) || Date.now() - ultima < 15 * 60e3) return rows; // caché de 15 minutos
+  if (forzar ? Date.now() - ultima < 60e3 : (rows.length && cerrado) || Date.now() - ultima < 15 * 60e3) return rows; // caché de 15 minutos
   const filas = await SAP.resumenPorCamion(fv, fv);
   if (!filas.length) sinDatos.set(fv, Date.now());
   await tx(async (c) => {
@@ -230,7 +231,7 @@ api.post("/sap/sincronizar", A.requiere(...OFICINA), h(async (req, res) => {
   if (!SAP.configurado()) return res.json({ configurado: false, fechaVenta: fv });
   if (fv > hoyPanama()) return res.json({ configurado: true, fechaVenta: fv, camiones: [], sinAsignar: [] });
   let filas;
-  try { filas = await leerSap(fv, req.user.id); }
+  try { filas = await leerSap(fv, req.user.id, !!(req.body && req.body.forzar)); }
   catch (e) { console.error("SAP:", e.message); return res.json({ configurado: true, fechaVenta: fv, error: "No se pudo leer SAP en este momento." }); }
   const [{ rows: recs }, { rows: choferes }] = await Promise.all([
     q("SELECT chofer_id, ruta FROM recibos WHERE fecha = $1", [fecha]),
