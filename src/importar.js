@@ -2,7 +2,7 @@
 // Importa datos de la versión offline: archivos .json de recibos (tasty-recibo-caja) y respaldos del portal (tasty-caja-respaldo).
 // Nada se borra: lo que no se aplica queda en recibo_versiones.
 const { tx, audit } = require("./db");
-const { checksum, fechaValida, sumarDias, toCents, toInt, KEYS } = require("./calc");
+const { checksum, fechaValida, sumarDias, fechaVentaDe, toCents, toInt, KEYS } = require("./calc");
 const R = require("./recibos");
 
 const slug = (s) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40) || "chofer";
@@ -24,7 +24,7 @@ async function unRecibo(c, obj, nombreArchivo, uid, extra = {}) {
   if (!fechaValida(obj.fecha) || !obj.choferId) return { ok: false, msg: nombreArchivo + ": le falta la fecha o el chofer." };
   const choferId = slug(obj.choferId) === String(obj.choferId) ? String(obj.choferId) : slug(obj.choferId);
   const d = R.limpiar(obj);
-  d.fecha = obj.fecha; d.fechaVenta = fechaValida(obj.fechaVenta) ? obj.fechaVenta : sumarDias(obj.fecha, -1); d.choferId = choferId;
+  d.fecha = obj.fecha; d.fechaVenta = fechaValida(obj.fechaVenta) ? obj.fechaVenta : fechaVentaDe(obj.fecha); d.choferId = choferId;
   const control = obj.control ? checksum({ fecha: obj.fecha, choferId: String(obj.choferId), total: d.total, efectivo: d.efectivo, ach: d.ach, yappy: d.yappy, cheque: d.cheque, conteo: d.conteo }) : null;
   const alterado = !!obj.alterado || (obj.control != null && (control !== obj.control || d.total !== obj.total));
   const guardado = obj.guardado && !isNaN(new Date(obj.guardado)) ? new Date(obj.guardado).toISOString() : new Date().toISOString();

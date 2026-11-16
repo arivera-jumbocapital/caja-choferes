@@ -3,7 +3,7 @@ const express = require("express");
 const { q, tx, audit } = require("./db");
 const A = require("./auth");
 const R = require("./recibos");
-const { fechaValida, hoyPanama, sumarDias, toCents } = require("./calc");
+const { fechaValida, hoyPanama, sumarDias, fechaVentaDe, toCents } = require("./calc");
 const { importar, limpiarCierre, slug } = require("./importar");
 const SAP = require("./sap");
 
@@ -96,7 +96,7 @@ api.put("/recibos/mio", A.requiere("chofer"), h(async (req, res) => {
   if (b.fecha < sumarDias(hoy, -60)) return bad(res, "Esa fecha es muy antigua. Pide a la oficina que la corrija.");
   const d = R.limpiar(b);
   if (d.total === 0) return bad(res, "El recibo está en cero. Escribe al menos una cantidad.");
-  d.fecha = b.fecha; d.fechaVenta = fechaValida(b.fechaVenta) ? b.fechaVenta : sumarDias(b.fecha, -1);
+  d.fecha = b.fecha; d.fechaVenta = fechaValida(b.fechaVenta) ? b.fechaVenta : fechaVentaDe(b.fecha);
   d.choferId = req.user.chofer_id; // siempre del usuario, nunca del cuerpo de la petición
   const r = await tx(async (c) => {
     const prev = await R.porFechaChofer(c, d.fecha, d.choferId, true);
@@ -157,8 +157,8 @@ api.put("/ventas", A.requiere(...OFICINA), h(async (req, res) => {
   } else {
     const { rows } = await q("SELECT 1 FROM choferes WHERE id = $1", [choferId]);
     if (!rows[0]) return bad(res, "Ese chofer no existe.");
-    await q(`INSERT INTO ventas (fecha, chofer_id, monto_c, actualizado_por) VALUES ($1,$2,$3,$4)
-      ON CONFLICT (fecha, chofer_id) DO UPDATE SET monto_c = EXCLUDED.monto_c, actualizado = now(), actualizado_por = EXCLUDED.actualizado_por`,
+    await q(`INSERT INTO ventas (fecha, chofer_id, monto_c, actualizado_por, origen) VALUES ($1,$2,$3,$4,'manual')
+      ON CONFLICT (fecha, chofer_id) DO UPDATE SET monto_c = EXCLUDED.monto_c, actualizado = now(), actualizado_por = EXCLUDED.actualizado_por, origen = 'manual'`,
     [fecha, choferId, toCents(monto), req.user.id]);
   }
   await audit(null, req.user.id, "venta", { fecha, choferId, monto: monto == null || monto === "" ? null : toCents(monto) });
@@ -176,30 +176,40 @@ api.put("/cierre/:fecha", A.requiere(...OFICINA), h(async (req, res) => {
   res.json({ cierre: rows[0].datos });
 }));
 
-/* ---------- facturación de SAP por camión ---------- */
-const sapOut = (r) => ({ camion: r.camion, documentos: r.documentos, facturado: Number(r.facturado_c), merma: Number(r.merma_c),
-  devolucion: Number(r.devolucion_c), neto: Number(r.neto_c), varios: r.varios, consultado: r.consultado });
-async function sapGuardado(fv) {
-  const { rows } = await q("SELECT * FROM sap_facturacion WHERE fecha_venta = $1 ORDER BY camion = 'Sin camion', camion", [fv]);
-  return { fechaVenta: fv, filas: rows.map(sapOut), consultado: rows[0] ? rows[0].consultado : null, configurado: SAP.configurado() };
+/* ---------- facturación de SAP por camión (automática) ---------- */
+// La venta de cada chofer se llena sola con el NETO de SAP (facturado − merma − devolución) de su camión,
+// del día de venta (el día anterior a la entrega; la entrega del lunes toma el sábado).
+// Una venta escrita a mano (origen 'manual') nunca se reemplaza.
+const normTxt = (s) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+const claveCamion = (cam) => normTxt(cam).replace(/^PE(?=[A-Z])/, ""); // PE-PTL-02 → PTL02, CAM-88 → CAM88
+function rutaTiene(ruta, cam) {
+  const r = normTxt(ruta), k = claveCamion(cam);
+  if (!k) return false;
+  for (let i = r.indexOf(k); i >= 0; i = r.indexOf(k, i + 1)) if (!/\d/.test(r[i + k.length] || "")) return true; // CAM8 no es CAM88
+  return false;
 }
-// Lo último que se leyó de SAP para esa fecha de venta (no consulta SAP).
-api.get("/sap/facturacion", A.requiere(...OFICINA), h(async (req, res) => {
-  const fv = req.query.fechaVenta;
-  if (!fechaValida(fv)) return bad(res, "Fecha no válida.");
-  res.json(await sapGuardado(fv));
-}));
-// Consulta SAP (solo lectura) y guarda el resumen por camión de esa fecha de venta.
-api.post("/sap/consultar", A.requiere(...OFICINA), h(async (req, res) => {
-  const fv = req.body && req.body.fechaVenta;
-  if (!fechaValida(fv)) return bad(res, "Fecha no válida.");
-  if (fv > hoyPanama()) return bad(res, "La fecha de venta no puede ser futura.");
-  let filas;
-  try { filas = await SAP.resumenPorCamion(fv, fv); }
-  catch (e) {
-    console.error("SAP:", e.message);
-    return bad(res, e.status === 503 ? e.message : "No se pudo leer SAP en este momento. Intenta de nuevo en unos minutos.", 502);
-  }
+// Chofer de un camión: camión SAP guardado (+4), ruta de su recibo del día (+3), ruta de la lista (+2), entregó ese día (+1).
+// Solo se asigna si un chofer queda claramente primero.
+function choferDeCamion(cam, choferes, recibos) {
+  const c = choferes.map((ch) => {
+    const rec = recibos[ch.id];
+    let p = 0;
+    if (ch.camion_sap && normTxt(ch.camion_sap) === normTxt(cam)) p += 4;
+    if (rec && rutaTiene(rec.ruta, cam)) p += 3;
+    if (rutaTiene(ch.ruta, cam)) p += 2;
+    if (p && rec) p += 1;
+    return { id: ch.id, p };
+  }).filter((x) => x.p > 0).sort((a, b) => b.p - a.p);
+  return c.length && (c.length === 1 || c[0].p > c[1].p) ? c[0].id : null;
+}
+const sinDatos = new Map(); // fecha de venta → hora de la última consulta que no trajo nada
+async function leerSap(fv, usuarioId) {
+  const { rows } = await q("SELECT * FROM sap_facturacion WHERE fecha_venta = $1", [fv]);
+  const ultima = rows[0] ? new Date(rows[0].consultado).getTime() : sinDatos.get(fv) || 0;
+  const cerrado = ultima > new Date(fv + "T00:00:00-05:00").getTime() + 2 * 864e5; // leído 2 días después: ya no cambia
+  if ((rows.length && cerrado) || Date.now() - ultima < 15 * 60e3) return rows; // caché de 15 minutos
+  const filas = await SAP.resumenPorCamion(fv, fv);
+  if (!filas.length) sinDatos.set(fv, Date.now());
   await tx(async (c) => {
     await c.query("DELETE FROM sap_facturacion WHERE fecha_venta = $1", [fv]);
     for (const f of filas) {
@@ -207,45 +217,45 @@ api.post("/sap/consultar", A.requiere(...OFICINA), h(async (req, res) => {
         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT (fecha_venta, camion) DO UPDATE SET documentos = sap_facturacion.documentos + EXCLUDED.documentos,
         facturado_c = sap_facturacion.facturado_c + EXCLUDED.facturado_c, merma_c = sap_facturacion.merma_c + EXCLUDED.merma_c,
         devolucion_c = sap_facturacion.devolucion_c + EXCLUDED.devolucion_c, neto_c = sap_facturacion.neto_c + EXCLUDED.neto_c, varios = sap_facturacion.varios + EXCLUDED.varios`,
-      [fv, f.camion, f.documentos, f.facturado, f.merma, f.devolucion, f.neto, f.varios, req.user.id]);
+      [fv, f.camion, f.documentos, f.facturado, f.merma, f.devolucion, f.neto, f.varios, usuarioId]);
     }
-    await audit(c, req.user.id, "sap_consulta", { fechaVenta: fv, camiones: filas.length, neto: filas.reduce((a, f) => a + f.neto, 0) });
   });
-  res.json(await sapGuardado(fv));
-}));
-// Pasa la facturación de SAP a la venta de cada chofer en la fecha de entrega.
-// asignaciones: [{ camion, choferId }]; base: "neto" o "facturado". Varios camiones del mismo chofer se suman.
-api.post("/sap/aplicar", A.requiere(...OFICINA), h(async (req, res) => {
-  const b = req.body || {};
-  if (!fechaValida(b.fecha) || !fechaValida(b.fechaVenta)) return bad(res, "Fecha no válida.");
-  const base = b.base === "facturado" ? "facturado" : "neto";
-  const asig = Array.isArray(b.asignaciones) ? b.asignaciones.filter((a) => a && a.camion && a.choferId) : [];
-  if (!asig.length) return bad(res, "Elige el chofer de al menos un camión.");
-  const { rows: filas } = await q("SELECT * FROM sap_facturacion WHERE fecha_venta = $1", [b.fechaVenta]);
-  if (!filas.length) return bad(res, "Primero consulta SAP para esa fecha de venta.");
-  const porCamion = Object.fromEntries(filas.map((f) => [f.camion, f]));
-  const { rows: chs } = await q("SELECT id FROM choferes");
-  const existe = new Set(chs.map((c) => c.id));
-  const montos = {}, camionDe = {};
-  for (const a of asig) {
-    const f = porCamion[a.camion];
-    if (!f || a.camion === "Sin camion" || !existe.has(a.choferId)) continue;
-    montos[a.choferId] = (montos[a.choferId] || 0) + Number(base === "neto" ? f.neto_c : f.facturado_c);
-    (camionDe[a.choferId] = camionDe[a.choferId] || []).push(a.camion);
+  return (await q("SELECT * FROM sap_facturacion WHERE fecha_venta = $1", [fv])).rows;
+}
+// Se llama al abrir un día en el Panel: trae SAP y llena la venta de los choferes.
+api.post("/sap/sincronizar", A.requiere(...OFICINA), h(async (req, res) => {
+  const fecha = req.body && req.body.fecha;
+  if (!fechaValida(fecha)) return bad(res, "Fecha no válida.");
+  const fv = fechaVentaDe(fecha);
+  if (!SAP.configurado()) return res.json({ configurado: false, fechaVenta: fv });
+  if (fv > hoyPanama()) return res.json({ configurado: true, fechaVenta: fv, camiones: [], sinAsignar: [] });
+  let filas;
+  try { filas = await leerSap(fv, req.user.id); }
+  catch (e) { console.error("SAP:", e.message); return res.json({ configurado: true, fechaVenta: fv, error: "No se pudo leer SAP en este momento." }); }
+  const [{ rows: recs }, { rows: choferes }] = await Promise.all([
+    q("SELECT chofer_id, ruta FROM recibos WHERE fecha = $1", [fecha]),
+    q("SELECT id, ruta, camion_sap FROM choferes WHERE activo"),
+  ]);
+  const recibos = Object.fromEntries(recs.map((r) => [r.chofer_id, r]));
+  const montos = {}, camiones = [], sinAsignar = [];
+  for (const f of filas) {
+    if (f.camion === "Sin camion") continue;
+    const id = choferDeCamion(f.camion, choferes, recibos);
+    if (!id) { sinAsignar.push(f.camion); continue; }
+    montos[id] = (montos[id] || 0) + Number(f.neto_c);
+    camiones.push({ camion: f.camion, choferId: id, neto: Number(f.neto_c), facturado: Number(f.facturado_c) });
   }
-  if (!Object.keys(montos).length) return bad(res, "Ningún camión se pudo asignar.");
+  let cambios = 0;
   await tx(async (c) => {
     for (const [cid, monto] of Object.entries(montos)) {
-      const { rows: prev } = await c.query("SELECT monto_c FROM ventas WHERE fecha = $1 AND chofer_id = $2", [b.fecha, cid]);
-      await c.query(`INSERT INTO ventas (fecha, chofer_id, monto_c, actualizado_por) VALUES ($1,$2,$3,$4)
-        ON CONFLICT (fecha, chofer_id) DO UPDATE SET monto_c = EXCLUDED.monto_c, actualizado = now(), actualizado_por = EXCLUDED.actualizado_por`, [b.fecha, cid, monto, req.user.id]);
-      // La venta anterior queda en la auditoría.
-      await audit(c, req.user.id, "venta", { fecha: b.fecha, choferId: cid, monto, anterior: prev[0] ? prev[0].monto_c : null, origen: "SAP " + base, fechaVenta: b.fechaVenta, camiones: camionDe[cid] });
-      // Recuerda el camión para la próxima vez (solo si el chofer usó un único camión).
-      if (b.recordar !== false && camionDe[cid].length === 1) await c.query("UPDATE choferes SET camion_sap = $2 WHERE id = $1", [cid, camionDe[cid][0]]);
+      const { rowCount } = await c.query(`INSERT INTO ventas (fecha, chofer_id, monto_c, origen) VALUES ($1,$2,$3,'sap')
+        ON CONFLICT (fecha, chofer_id) DO UPDATE SET monto_c = EXCLUDED.monto_c, origen = 'sap', actualizado = now()
+        WHERE ventas.origen = 'sap' AND ventas.monto_c <> EXCLUDED.monto_c`, [fecha, cid, monto]);
+      cambios += rowCount;
     }
+    if (cambios) await audit(c, req.user.id, "venta_sap", { fecha, fechaVenta: fv, montos });
   });
-  res.json({ ok: true, ventas: montos });
+  res.json({ configurado: true, fechaVenta: fv, consultado: filas[0] ? filas[0].consultado : null, camiones, sinAsignar, cambios });
 }));
 
 /* ---------- oficina: verificar, eliminar, versiones ---------- */
@@ -289,7 +299,7 @@ api.post("/versiones/:id/restaurar", A.requiere(...OFICINA), h(async (req, res) 
     const { rows: ch } = await c.query("SELECT 1 FROM choferes WHERE id = $1", [x.choferId]);
     if (!ch[0]) return { error: "El chofer de esa versión ya no existe en la lista." };
     const d = R.limpiar(x);
-    d.fecha = x.fecha; d.fechaVenta = fechaValida(x.fechaVenta) ? x.fechaVenta : sumarDias(x.fecha, -1); d.choferId = x.choferId;
+    d.fecha = x.fecha; d.fechaVenta = fechaValida(x.fechaVenta) ? x.fechaVenta : fechaVentaDe(x.fecha); d.choferId = x.choferId;
     await R.escribir(c, d, { usuarioId: req.user.id, origen: "restaurado", alterado: !!x.alterado, guardado: x.guardado, motivo: "Reemplazado al restaurar otra versión" });
     await c.query("UPDATE recibo_versiones SET restaurado = true WHERE id = $1", [v.id]);
     await audit(c, req.user.id, "carga", { ok: true, msg: "Restaurado: " + (x.chofer || x.choferId) + " · " + x.fecha + " · $" + (d.total / 100).toFixed(2) });

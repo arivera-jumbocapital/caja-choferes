@@ -152,7 +152,8 @@ h2 { font-family: var(--f-display); font-size: 1.05rem; margin: 0; }
   var fmt = function (c) { return (c < 0 ? "-$" : "$") + (Math.abs(c) / 100).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }); };
   var toCents = function (v) { var n = parseFloat(v); return isFinite(n) && n > 0 ? Math.round(n * 100) : 0; };
   var today = function () { return new Date().toLocaleDateString("en-CA", { timeZone: "America/Panama" }); };
-  var prevDay = function (d) { var x = new Date(d + "T12:00:00"); x.setDate(x.getDate() - 1); return x.toLocaleDateString("en-CA"); };
+  // Día de venta: el anterior a la entrega; el lunes toma el sábado.
+  var prevDay = function (d) { var x = new Date(d + "T12:00:00"); x.setDate(x.getDate() - (x.getDay() === 1 ? 2 : 1)); return x.toLocaleDateString("en-CA"); };
   var longDate = function (d) { return d ? new Date(d + "T12:00:00").toLocaleDateString("es-PA", { day: "numeric", month: "long", year: "numeric" }) : ""; };
   var when = function (iso) { return iso ? new Date(iso).toLocaleString("es-PA", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit", timeZone: "America/Panama" }) : ""; };
   var store = { get: function (k) { try { return localStorage.getItem(k); } catch (e) { return null; } }, set: function (k, v) { try { localStorage.setItem(k, v); } catch (e) {} }, del: function (k) { try { localStorage.removeItem(k); } catch (e) {} } };

@@ -44,4 +44,6 @@ function fechaValida(f) {
 const hoyPanama = () => new Date().toLocaleDateString("en-CA", { timeZone: "America/Panama" });
 function sumarDias(f, n) { const d = new Date(f + "T12:00:00Z"); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); }
 
-module.exports = { DENOMS, KEYS, toInt, toCents, conteoLimpio, sums, checksum, fechaValida, hoyPanama, sumarDias, MAX_CENTAVOS };
+// Día de venta de una entrega: el día anterior; la entrega del lunes toma el sábado.
+function fechaVentaDe(f) { return sumarDias(f, new Date(f + "T12:00:00Z").getUTCDay() === 1 ? -2 : -1); }
+module.exports = { DENOMS, KEYS, toInt, toCents, conteoLimpio, sums, checksum, fechaValida, hoyPanama, sumarDias, fechaVentaDe, MAX_CENTAVOS };

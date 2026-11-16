@@ -146,6 +146,8 @@ CREATE TABLE IF NOT EXISTS sap_facturacion (
   consultado_por int NULL,
   PRIMARY KEY (fecha_venta, camion)
 );
+-- De dónde salió la venta: 'manual' (escrita en el portal) o 'sap' (llenada sola desde SAP; se actualiza).
+ALTER TABLE ventas ADD COLUMN IF NOT EXISTS origen text NOT NULL DEFAULT 'manual';
 CREATE INDEX IF NOT EXISTS recibos_fecha_idx ON recibos (fecha);
 CREATE INDEX IF NOT EXISTS versiones_creado_idx ON recibo_versiones (creado DESC);
 CREATE INDEX IF NOT EXISTS auditoria_accion_idx ON auditoria (accion, cuando DESC);

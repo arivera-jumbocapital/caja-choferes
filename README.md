@@ -73,14 +73,14 @@ DATABASE_URL=postgres://usuario:clave@localhost:5432/caja ADMIN_USER=gerente ADM
 ```
 Luego abre http://localhost:3000.
 
-## Facturación SAP por ruta
+## Facturación SAP (automática)
 
-En el **Panel**, la sección *Facturación SAP por ruta* consulta SAP (facturas y notas de crédito, sin documentos de servicio ni anulados) para la fecha de venta y muestra por camión: documentos, facturado (almacén 09), merma (10), devolución (16) y **neto** = facturado − merma − devolución.
+Al abrir un día en el **Panel**, el portal lee SAP (facturas y notas de crédito, sin servicios ni anulados) y llena la **Venta** de cada chofer con el **neto** de su camión: facturado (almacén 09) − merma (10) − devolución (16). La tarjeta **Facturación** muestra el total y de qué día salió.
 
-- Cada camión de SAP (`U_CodVehiculo`, p. ej. `CAM-90`, `PE-PTL-02`) se relaciona con un chofer por el campo **Camión SAP** de la *Lista de choferes*, por la ruta escrita en su recibo del día o por su ruta en la lista. Si dos choferes comparten camión, el portal pide elegir.
-- **Pasar a la venta** escribe el neto (o el facturado) en la venta de cada chofer para la fecha de entrega. Si ya había una venta escrita pide confirmar, y la anterior queda en la auditoría. El camión elegido se recuerda para la próxima vez.
-- La fila *Sin camion* son los canales que SAP no registra por camión (supermercados, Food Service, etc.): se muestra pero no se asigna.
-- El día de hoy todavía no tiene todas sus facturas en SAP.
+- **Día de venta:** el día anterior a la entrega; la entrega del **lunes** toma el **sábado**.
+- Cada camión de SAP (`U_CodVehiculo`, p. ej. `CAM-90`, `PE-PTL-02`) se relaciona con un chofer por el campo **Camión SAP** de la *Lista de choferes*, la ruta de su recibo del día o su ruta en la lista. Si no queda claro (dos choferes con el mismo camión), la tarjeta avisa "Sin chofer: …".
+- Una venta **escrita a mano no se reemplaza**. Si se borra, vuelve la de SAP.
+- SAP se lee como máximo cada 15 minutos por día; pasados 2 días la cifra queda fija.
 
 ## Reglas que respeta el servidor
 
