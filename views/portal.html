@@ -749,14 +749,61 @@ details.day .scroll { padding: 6px 10px 10px; }
     XLSX.utils.sheet_add_aoa(ws2, Rt, { origin: "J1" });
     ws2["!cols"] = [{ wch: 6 }, { wch: 24 }, { wch: 22 }, { wch: 12 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 12 }, { wch: 3 }, { wch: 12 }, { wch: 16 }, { wch: 10 }, { wch: 12 }, { wch: 13 }, { wch: 11 }];
     for (const ws of [ws1, ws2]) for (const addr in ws) { if (addr[0] === "!") continue; const cell = ws[addr]; if (cell.t === "n" && !Number.isInteger(cell.v)) cell.z = "#,##0.00"; }
-    // Formato de la hoja Choferes: columna A en negrita; filas 3, 4 y 25 con fondo azul, negrita y letra blanca.
-    const estilo = (ws, r, c, s) => { const a = XLSX.utils.encode_cell({ r, c }); ws[a] = ws[a] || { t: "s", v: "" }; ws[a].s = { ...(ws[a].s || {}), ...s }; };
+    /* ----- Formato (colores, negritas y dólares) ----- */
+    const DOLAR = '"$"#,##0.00;-"$"#,##0.00';
+    const estilo = (ws, r, c, s) => {
+      const a = XLSX.utils.encode_cell({ r, c }); ws[a] = ws[a] || { t: "s", v: "" };
+      const o = ws[a].s || {}; ws[a].s = { ...o, ...s, font: { ...(o.font || {}), ...(s.font || {}) } };
+    };
+    const negrita = { font: { bold: true } };
     const enc = { font: { bold: true, color: { rgb: "FFFFFF" } }, fill: { patternType: "solid", fgColor: { rgb: "0A4D8F" } }, alignment: { horizontal: "center", vertical: "center", wrapText: true } };
+    const dolar = (ws, r, c, bold) => { const cell = ws[XLSX.utils.encode_cell({ r, c })]; if (cell && cell.t === "n") { cell.z = DOLAR; if (bold) estilo(ws, r, c, negrita); } };
+    const fila = (ws, r, desde, hasta, s) => { for (let c = desde; c <= hasta; c++) estilo(ws, r, c, s); };
+    const filaTotal = (ws, r, desde, hasta) => { fila(ws, r, desde, hasta, negrita); for (let c = desde; c <= hasta; c++) dolar(ws, r, c, true); };
+    const ref = (ws, minC) => { const e = XLSX.utils.decode_range(ws["!ref"]).e; ws["!ref"] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: e.r, c: Math.max(e.c, minC) } }); };
+
+    // Hoja Choferes: columna A en negrita; filas 3, 4 y 25 azules con letra blanca en negrita.
     const ult = XLSX.utils.decode_range(ws1["!ref"]).e;
-    for (let r = 0; r <= ult.r; r++) if (ws1[XLSX.utils.encode_cell({ r, c: 0 })]) estilo(ws1, r, 0, { font: { bold: true } });
+    for (let r = 0; r <= ult.r; r++) if (ws1[XLSX.utils.encode_cell({ r, c: 0 })]) estilo(ws1, r, 0, negrita);
     const filaBanco = A.findIndex((row, i) => i > 3 && row[0] === "Tipo" && row[5] === "Ruta"); // fila 25 (encabezado de los bloques de abajo)
-    for (const [r, hasta] of [[2, ult.c], [3, ult.c], [filaBanco, 10]]) if (r >= 0) for (let c = 0; c <= hasta; c++) estilo(ws1, r, c, enc);
-    ws1["!ref"] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: ult.r, c: Math.max(ult.c, 10) } });
+    for (const [r, hasta] of [[2, ult.c], [3, ult.c], [filaBanco, 10]]) if (r >= 0) fila(ws1, r, 0, hasta, enc);
+    // Columnas "Total" (cada chofer y los tres totales): dólares y negrita, de las denominaciones a Diferencia.
+    const finMatriz = filaBanco > 0 ? filaBanco - 2 : ult.r;
+    for (let r = 4; r <= finMatriz; r++) for (let c = 3; c <= ult.c; c += 2) dolar(ws1, r, c, true);
+    // Filas Total Recibido, Total y Venta en negrita (con dólares).
+    for (let r = 4; r <= finMatriz; r++) if (["Total Recibido", "Total", "Venta"].includes(A[r][0])) filaTotal(ws1, r, 0, ult.c);
+    // Bloques de abajo: montos en dólares; filas de total en negrita.
+    if (filaBanco > 0) for (let r = filaBanco + 1; r <= ult.r; r++) {
+      const row = A[r] || [];
+      for (const c of [3, 7, 10]) dolar(ws1, r, c, false);
+      if (row[1] === "Total Efectivo") filaTotal(ws1, r, 0, 3);
+      if (row[6] === "Total") filaTotal(ws1, r, 5, 7);
+      if (/^(Total|Dif)/.test(row[9] || "")) filaTotal(ws1, r, 9, 10);
+    }
+    ref(ws1, 10);
+
+    // Hoja de la fecha (Cierre).
+    fila(ws2, 0, 0, 0, negrita); fila(ws2, 1, 0, 0, negrita);           // títulos
+    fila(ws2, 2, 0, 7, enc);                                             // fila 3, A a H
+    fila(ws2, 1, 9, 14, enc);                                            // fila 2, J a O
+    const nRutas = R.length;
+    for (let r = 3; r < 3 + nRutas; r++) { for (let c = 3; c <= 7; c++) dolar(ws2, r, c, false); dolar(ws2, r, 7, true); } // montos por ruta; columna TOTAL en negrita
+    const TITULOS = ["CHEQUES RECIBIDOS", "FOOD SERVICES", "ACH DE CHOFER", "VENTAS DE MERMA", "DEPÓSITO TOTAL CHUTRA"];
+    B.forEach((row, r) => {
+      const et = String(row[0] || row[2] || "");
+      if (et === "RESUMEN DEPÓSITOS AL BANCO") fila(ws2, r, 0, 3, enc);
+      else if (TITULOS.includes(et)) fila(ws2, r, 0, 0, negrita);
+      else if (/^TOTAL/.test(et)) filaTotal(ws2, r, 0, 7);
+      else if (r > 3 + nRutas) dolar(ws2, r, 3, false);                 // montos de los resúmenes y listas
+    });
+    Rt.forEach((row, r) => {
+      const et = String(row[0] || ""), et2 = String(row[1] || "");
+      if (/^DEPÓSITO (BRINKS|PARA BANCO|TOTAL PARA BANCO)/.test(et)) fila(ws2, r, 9, 12, enc);
+      else if (et === "DEPÓSITO TOTAL CHUTRA") fila(ws2, r, 9, 9, negrita);
+      else if (/^(TOTAL|Total|DIF)/.test(et2)) filaTotal(ws2, r, 9, 14);
+      else if (r > 1) dolar(ws2, r, 12, false);                         // columna Monto
+    });
+    ref(ws2, 14);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws1, "Choferes");
     XLSX.utils.book_append_sheet(wb, ws2, dmy(S.pFecha));
