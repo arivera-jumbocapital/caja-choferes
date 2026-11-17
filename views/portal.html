@@ -6,7 +6,8 @@
 <title>Caja de Choferes · Gerencia Tasty Choice</title>
 <link rel="icon" href="/logo.png">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Semi+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<!-- xlsx-js-style: misma API de SheetJS, pero guarda colores y negritas en el Excel -->
+<script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js"></script>
 <style>
 :root {
   --brand-red: #c8141b; --brand-blue: #0a4d8f; --brand-gold: #f2b230;
@@ -748,6 +749,14 @@ details.day .scroll { padding: 6px 10px 10px; }
     XLSX.utils.sheet_add_aoa(ws2, Rt, { origin: "J1" });
     ws2["!cols"] = [{ wch: 6 }, { wch: 24 }, { wch: 22 }, { wch: 12 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 12 }, { wch: 3 }, { wch: 12 }, { wch: 16 }, { wch: 10 }, { wch: 12 }, { wch: 13 }, { wch: 11 }];
     for (const ws of [ws1, ws2]) for (const addr in ws) { if (addr[0] === "!") continue; const cell = ws[addr]; if (cell.t === "n" && !Number.isInteger(cell.v)) cell.z = "#,##0.00"; }
+    // Formato de la hoja Choferes: columna A en negrita; filas 3, 4 y 25 con fondo azul, negrita y letra blanca.
+    const estilo = (ws, r, c, s) => { const a = XLSX.utils.encode_cell({ r, c }); ws[a] = ws[a] || { t: "s", v: "" }; ws[a].s = { ...(ws[a].s || {}), ...s }; };
+    const enc = { font: { bold: true, color: { rgb: "FFFFFF" } }, fill: { patternType: "solid", fgColor: { rgb: "0A4D8F" } }, alignment: { horizontal: "center", vertical: "center", wrapText: true } };
+    const ult = XLSX.utils.decode_range(ws1["!ref"]).e;
+    for (let r = 0; r <= ult.r; r++) if (ws1[XLSX.utils.encode_cell({ r, c: 0 })]) estilo(ws1, r, 0, { font: { bold: true } });
+    const filaBanco = A.findIndex((row, i) => i > 3 && row[0] === "Tipo" && row[5] === "Ruta"); // fila 25 (encabezado de los bloques de abajo)
+    for (const [r, hasta] of [[2, ult.c], [3, ult.c], [filaBanco, 10]]) if (r >= 0) for (let c = 0; c <= hasta; c++) estilo(ws1, r, c, enc);
+    ws1["!ref"] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: ult.r, c: Math.max(ult.c, 10) } });
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws1, "Choferes");
     XLSX.utils.book_append_sheet(wb, ws2, dmy(S.pFecha));
