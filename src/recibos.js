@@ -3,11 +3,13 @@
 const { conteoLimpio, sums, toCents } = require("./calc");
 
 const SELECT = `
-SELECT r.*, c.nombre AS chofer_nombre, c.tipo AS chofer_tipo, uv.nombre AS verificado_por_nombre, ue.nombre AS enviado_por_nombre
+SELECT r.*, c.nombre AS chofer_nombre, c.tipo AS chofer_tipo, uv.nombre AS verificado_por_nombre, ue.nombre AS enviado_por_nombre,
+  COALESCE(NULLIF(ua.nombre, ''), ua.usuario) AS ajustado_por_nombre
 FROM recibos r
 JOIN choferes c ON c.id = r.chofer_id
 LEFT JOIN usuarios uv ON uv.id = r.verificado_por
-LEFT JOIN usuarios ue ON ue.id = r.enviado_por`;
+LEFT JOIN usuarios ue ON ue.id = r.enviado_por
+LEFT JOIN usuarios ua ON ua.id = r.ajustado_por`;
 
 // Misma forma que el recibo de la versión offline (más dbId y campos de control).
 function out(r) {
@@ -18,6 +20,7 @@ function out(r) {
     refs: r.refs, notas: r.notas, guardado: r.guardado, recibido: r.creado, actualizado: r.actualizado,
     verificado: r.verificado, verificadoPor: r.verificado_por_nombre || null, verificadoEl: r.verificado_el,
     enviadoPor: r.enviado_por_nombre || null, origen: r.origen, alterado: r.alterado, correcciones: r.correcciones || 0,
+    ajustado: !!r.ajustado_el, ajustadoPor: r.ajustado_por_nombre || null, ajustadoEl: r.ajustado_el || null,
   };
 }
 
@@ -60,7 +63,8 @@ async function escribir(c, d, opts) {
       fecha_venta = EXCLUDED.fecha_venta, ruta = EXCLUDED.ruta, conteo = EXCLUDED.conteo, ach_c = EXCLUDED.ach_c, yappy_c = EXCLUDED.yappy_c,
       cheque_c = EXCLUDED.cheque_c, efectivo_c = EXCLUDED.efectivo_c, total_c = EXCLUDED.total_c, refs = EXCLUDED.refs, notas = EXCLUDED.notas,
       enviado_por = EXCLUDED.enviado_por, origen = EXCLUDED.origen, alterado = EXCLUDED.alterado, guardado = EXCLUDED.guardado,
-      verificado = EXCLUDED.verificado, verificado_por = NULL, verificado_el = NULL, correcciones = EXCLUDED.correcciones, actualizado = now()
+      verificado = EXCLUDED.verificado, verificado_por = NULL, verificado_el = NULL, correcciones = EXCLUDED.correcciones,
+      ajustado_por = NULL, ajustado_el = NULL, actualizado = now()
     RETURNING id`, params);
   return { id: rows[0].id, prev };
 }

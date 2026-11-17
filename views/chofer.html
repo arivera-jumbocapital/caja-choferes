@@ -210,14 +210,15 @@ h2 { font-family: var(--f-display); font-size: 1.05rem; margin: 0; }
   }
   var status = function (m, cls) { $("status").textContent = m; $("status").className = "status " + (cls || ""); };
 
-  // Se cierra si la oficina lo verificó o si el chofer ya usó su única corrección.
-  function locked() { return !!(SAVED && (SAVED.verificado || SAVED.correcciones >= 1)); }
+  // Se cierra si la oficina lo verificó o ajustó, o si el chofer ya usó su única corrección.
+  function locked() { return !!(SAVED && (SAVED.verificado || SAVED.ajustado || SAVED.correcciones >= 1)); }
   function estado() {
     var e = $("estado"), lock = locked();
     document.querySelectorAll(".wrap input:not([readonly]), .wrap textarea").forEach(function (i) { i.disabled = lock && i.id !== "f-fecha"; });
     $("btn-save").disabled = lock; $("btn-clear").disabled = lock; $("btn-down").disabled = !SAVED;
     if (!saveArm) $("btn-save").textContent = SAVED ? "Guardar corrección" : "Guardar recibo";
     if (lock && SAVED.verificado) { e.className = "estado lock"; e.textContent = "✔ Verificado por la oficina" + (SAVED.verificadoPor ? " (" + SAVED.verificadoPor + ")" : "") + ". Ya no se puede cambiar. Si hay un error, avísale a la oficina."; }
+    else if (lock && SAVED.ajustado) { e.className = "estado lock"; e.textContent = "🔒 La oficina revisó y ajustó las cantidades de este recibo" + (SAVED.ajustadoEl ? " (" + when(SAVED.ajustadoEl) + ")" : "") + ". Ya no se puede cambiar. Si tienes dudas, habla con la oficina."; }
     else if (lock) { e.className = "estado lock"; e.textContent = "🔒 Recibo cerrado: ya usaste tu única corrección (" + when(SAVED.actualizado) + "). La oficina ya lo puede ver. Si hay otro error, avísale a la oficina."; }
     else if (SAVED && !dirty) { e.className = "estado ok"; e.textContent = "✔ Recibo guardado (" + when(SAVED.actualizado) + "). La oficina ya lo puede ver. Si te equivocaste, puedes corregirlo UNA sola vez; después queda cerrado."; }
     else if (SAVED) { e.className = "estado warn"; e.textContent = "Tienes cambios sin guardar. Solo puedes corregir el recibo UNA vez: revisa bien antes de tocar \"Guardar corrección\"."; }
@@ -287,7 +288,7 @@ h2 { font-family: var(--f-display); font-size: 1.05rem; margin: 0; }
       var n = r.conteo[d.k] || 0;
       rows += "<tr><td>" + d.label + '</td><td class="n">' + (n || "—") + '</td><td class="n">' + (n ? fmt(n * d.cents) : "—") + "</td></tr>";
     });
-    var est = r.verificado ? "Verificado por la oficina" + (r.verificadoPor ? " (" + r.verificadoPor + ")" : "") : r.correcciones ? "Corregido una vez · cerrado" : "Guardado · pendiente de verificar";
+    var est = r.verificado ? "Verificado por la oficina" + (r.verificadoPor ? " (" + r.verificadoPor + ")" : "") : r.ajustado ? "Cantidades ajustadas por la oficina · cerrado" : r.correcciones ? "Corregido una vez · cerrado" : "Guardado · pendiente de verificar";
     return '<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">' +
       "<title>Recibo " + escH(ME.chofer.nombre) + " " + r.fecha + "</title>" +
       "<style>*{box-sizing:border-box}body{margin:0;background:#f2f4f7;color:#16202b;font-family:Barlow,system-ui,'Segoe UI',sans-serif;font-size:15px}" +

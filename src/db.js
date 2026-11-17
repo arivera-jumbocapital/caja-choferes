@@ -148,6 +148,9 @@ CREATE TABLE IF NOT EXISTS sap_facturacion (
 );
 -- De dónde salió la venta: 'manual' (escrita en el portal) o 'sap' (llenada sola desde SAP; se actualiza).
 ALTER TABLE ventas ADD COLUMN IF NOT EXISTS origen text NOT NULL DEFAULT 'manual';
+-- Conteo de billetes y monedas ajustado por la oficina (gerente o asistente).
+ALTER TABLE recibos ADD COLUMN IF NOT EXISTS ajustado_por int NULL REFERENCES usuarios(id);
+ALTER TABLE recibos ADD COLUMN IF NOT EXISTS ajustado_el timestamptz NULL;
 CREATE INDEX IF NOT EXISTS recibos_fecha_idx ON recibos (fecha);
 CREATE INDEX IF NOT EXISTS versiones_creado_idx ON recibo_versiones (creado DESC);
 CREATE INDEX IF NOT EXISTS auditoria_accion_idx ON auditoria (accion, cuando DESC);

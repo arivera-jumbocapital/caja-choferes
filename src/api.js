@@ -3,7 +3,7 @@ const express = require("express");
 const { q, tx, audit } = require("./db");
 const A = require("./auth");
 const R = require("./recibos");
-const { fechaValida, hoyPanama, sumarDias, fechaVentaDe, toCents } = require("./calc");
+const { fechaValida, hoyPanama, sumarDias, fechaVentaDe, toCents, conteoLimpio, sums, KEYS } = require("./calc");
 const { importar, limpiarCierre, slug } = require("./importar");
 const SAP = require("./sap");
 
@@ -101,6 +101,7 @@ api.put("/recibos/mio", A.requiere("chofer"), h(async (req, res) => {
   const r = await tx(async (c) => {
     const prev = await R.porFechaChofer(c, d.fecha, d.choferId, true);
     if (prev && prev.verificado) return { error: "La oficina ya verificó este recibo. Si hay un error, avísale a la oficina." };
+    if (prev && prev.ajustado_el) return { error: "La oficina ya ajustó el conteo de este recibo. Si hay un error, avísale a la oficina." };
     if (prev) {
       // Guardar otra vez lo mismo (por ejemplo, un doble toque) no cuenta como corrección.
       const igual = prev.fecha_venta === d.fechaVenta && prev.ruta === d.ruta && prev.ach_c === d.ach && prev.yappy_c === d.yappy && prev.cheque_c === d.cheque &&
@@ -267,6 +268,27 @@ api.post("/recibos/:id/verificar", A.requiere(...OFICINA), h(async (req, res) =>
   if (!rowCount) return bad(res, "Ese recibo ya no existe.", 404);
   await audit(null, req.user.id, v ? "verificar" : "quitar_verificado", { id: Number(req.params.id) });
   res.json({ ok: true });
+}));
+// La oficina corrige la cantidad de billetes y monedas de un recibo (el chofer a veces escribe mal las cifras).
+// Guarda la versión anterior, recalcula los totales en el servidor y deja el recibo cerrado para el chofer.
+api.put("/recibos/:id/conteo", A.requiere(...OFICINA), h(async (req, res) => {
+  const b = req.body || {};
+  if (!b.conteo || typeof b.conteo !== "object") return bad(res, "Conteo no válido.");
+  const r = await tx(async (c) => {
+    const prev = await R.porId(c, Number(req.params.id) || 0, true);
+    if (!prev) return { error: "Ese recibo ya no existe.", status: 404 };
+    const conteo = conteoLimpio(b.conteo);
+    const s = sums(conteo, prev.ach_c, prev.yappy_c, prev.cheque_c);
+    if (s.total === 0) return { error: "El recibo quedaría en cero. Si no corresponde, elimínalo." };
+    if (KEYS.every((k) => (prev.conteo[k] || 0) === conteo[k])) return { recibo: R.out(prev) };
+    await R.guardarVersion(c, prev, "Conteo ajustado por la oficina (" + (req.user.nombre || req.user.usuario) + ")", req.user.id);
+    await c.query(`UPDATE recibos SET conteo = $2, efectivo_c = $3, total_c = $4, ajustado_por = $5, ajustado_el = now(), actualizado = now() WHERE id = $1`,
+      [prev.id, JSON.stringify(conteo), s.efectivo, s.total, req.user.id]);
+    await audit(c, req.user.id, "conteo_ajustado", { id: prev.id, fecha: prev.fecha, chofer: prev.chofer_id, antes: prev.total_c, despues: s.total });
+    return { recibo: R.out(await R.porId(c, prev.id)) };
+  });
+  if (r.error) return bad(res, r.error, r.status || 400);
+  res.json(r);
 }));
 api.delete("/recibos/:id", A.requiere(...OFICINA), h(async (req, res) => {
   const ok = await tx(async (c) => {
