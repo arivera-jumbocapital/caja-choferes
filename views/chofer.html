@@ -72,6 +72,11 @@ button:disabled { opacity: .5; cursor: default; }
 .hist .sel { border-color: var(--accent); background: var(--accent-soft); }
 .pill { font-size: .72rem; font-weight: 600; padding: 1px 8px; border-radius: 999px; margin-left: 6px; background: var(--good-soft); color: var(--good); }
 h2 { font-family: var(--f-display); font-size: 1.05rem; margin: 0; }
+.cred { display: grid; gap: 8px; }
+.cred-row { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, .9fr) minmax(0, .9fr) auto; gap: 6px; align-items: center; }
+.cred-row .mon { font-family: var(--f-num); text-align: right; }
+.cred-row button { padding: 8px 10px; font-size: .85rem; }
+@media (max-width: 480px) { .cred-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; } .cred-row .cli { grid-column: 1 / -1; } }
 [hidden] { display: none !important; }
 </style>
 </head>
@@ -111,7 +116,7 @@ h2 { font-family: var(--f-display); font-size: 1.05rem; margin: 0; }
       <label class="field">Cheque ($)<input type="number" inputmode="decimal" step="0.01" min="0" id="f-cheque" placeholder="0.00"></label>
     </div>
     <label class="field">Referencias / Nº de cheque<input type="text" id="f-refs" autocomplete="off" placeholder="Ej. Cheque 004512 Banco General"></label>
-    <label class="field">Observaciones<textarea id="f-notas" placeholder="Créditos, faltantes, merma…"></textarea></label>
+    <label class="field">Observaciones<textarea id="f-notas" placeholder="Faltantes, merma…"></textarea></label>
     <div>
       <div class="tot"><span>Billetes</span><span id="t-bill">$0.00</span></div>
       <div class="tot"><span>Monedas</span><span id="t-mon">$0.00</span></div>
@@ -119,6 +124,14 @@ h2 { font-family: var(--f-display); font-size: 1.05rem; margin: 0; }
       <div class="tot"><span>ACH + Yappy + Cheque</span><span id="t-otros">$0.00</span></div>
     </div>
     <div class="grand"><b>Total entregado</b><span id="t-total">$0.00</span></div>
+  </div>
+
+  <div class="card">
+    <h2>Clientes a crédito</h2>
+    <p class="hint">Anota los clientes que quedaron a crédito. Es <b>solo información</b> para la oficina: <b>no suma</b> al total entregado.</p>
+    <div class="cred" id="cred"></div>
+    <button type="button" id="cred-add">+ Agregar cliente a crédito</button>
+    <div class="tot"><span>Total a crédito (informativo, no suma)</span><span id="t-cred">$0.00</span></div>
   </div>
 
   <div class="card">
@@ -181,9 +194,33 @@ h2 { font-family: var(--f-display); font-size: 1.05rem; margin: 0; }
     return {
       fecha: $("f-fecha").value, fechaVenta: $("f-fventa").value, ruta: $("f-ruta").value.trim(),
       conteo: conteo, ach: toCents($("f-ach").value), yappy: toCents($("f-yappy").value), cheque: toCents($("f-cheque").value),
-      refs: $("f-refs").value.trim(), notas: $("f-notas").value.trim()
+      refs: $("f-refs").value.trim(), notas: $("f-notas").value.trim(), credito: leerCredito()
     };
   }
+  /* Clientes a crédito: solo informativo, no entra en ningún total. */
+  function leerCredito() {
+    var out = [];
+    document.querySelectorAll("#cred .cred-row").forEach(function (row) {
+      var x = { cliente: row.querySelector(".cli").value.trim(), factura: row.querySelector(".fac").value.trim(), monto: toCents(row.querySelector(".mon").value) };
+      if (x.cliente || x.factura || x.monto) out.push(x);
+    });
+    return out;
+  }
+  function cambio() { var x = calc(false); x.r.cuando = new Date().toISOString(); dirty = true; store.set(DRAFT, JSON.stringify(x.r)); estado(); }
+  function credRow(x) {
+    var row = document.createElement("div"); row.className = "cred-row";
+    row.innerHTML = '<input class="cli" type="text" autocomplete="off" placeholder="Cliente" aria-label="Cliente a crédito">' +
+      '<input class="fac" type="text" autocomplete="off" placeholder="Nº factura" aria-label="Número de factura">' +
+      '<input class="mon" type="number" inputmode="decimal" step="0.01" min="0" placeholder="0.00" aria-label="Monto a crédito">' +
+      '<button type="button" aria-label="Quitar cliente">Quitar</button>';
+    row.querySelector(".cli").value = (x && x.cliente) || ""; row.querySelector(".fac").value = (x && x.factura) || "";
+    row.querySelector(".mon").value = x && x.monto ? (x.monto / 100).toFixed(2) : "";
+    row.querySelectorAll("input").forEach(function (i) { i.addEventListener("input", cambio); });
+    row.querySelector("button").addEventListener("click", function () { row.remove(); cambio(); });
+    $("cred").appendChild(row);
+    return row;
+  }
+  $("cred-add").addEventListener("click", function () { credRow(null).querySelector(".cli").focus(); estado(); });
   function sums(r) {
     var bill = 0, mon = 0;
     DENOMS.forEach(function (d) { var v = (r.conteo[d.k] || 0) * d.cents; if (d.tipo === "Billetes") bill += v; else mon += v; });
@@ -196,6 +233,7 @@ h2 { font-family: var(--f-display); font-size: 1.05rem; margin: 0; }
     $("a-total").textContent = fmt(s.efec);
     $("t-bill").textContent = fmt(s.bill); $("t-mon").textContent = fmt(s.mon); $("t-efec").textContent = fmt(s.efec);
     $("t-otros").textContent = fmt(s.otros); $("t-total").textContent = fmt(s.total);
+    $("t-cred").textContent = fmt(r.credito.reduce(function (a, c) { return a + c.monto; }, 0));
     if (save) { dirty = true; store.set(DRAFT, JSON.stringify(r)); estado(); }
     return { r: r, s: s };
   }
@@ -203,6 +241,7 @@ h2 { font-family: var(--f-display); font-size: 1.05rem; margin: 0; }
     DENOMS.forEach(function (d) { $("q-" + d.k).value = r && r.conteo && r.conteo[d.k] ? r.conteo[d.k] : ""; });
     ["ach", "yappy", "cheque"].forEach(function (k) { $("f-" + k).value = r && r[k] ? (r[k] / 100).toFixed(2) : ""; });
     $("f-refs").value = (r && r.refs) || ""; $("f-notas").value = (r && r.notas) || "";
+    $("cred").innerHTML = ""; ((r && r.credito) || []).forEach(credRow);
     $("f-fecha").value = fecha;
     $("f-fventa").value = (r && r.fechaVenta) || prevDay(fecha);
     $("f-ruta").value = (r && r.ruta) || ME.chofer.ruta || "";
@@ -216,6 +255,7 @@ h2 { font-family: var(--f-display); font-size: 1.05rem; margin: 0; }
     var e = $("estado"), lock = locked();
     document.querySelectorAll(".wrap input:not([readonly]), .wrap textarea").forEach(function (i) { i.disabled = lock && i.id !== "f-fecha"; });
     $("btn-save").disabled = lock; $("btn-clear").disabled = lock; $("btn-down").disabled = !SAVED;
+    document.querySelectorAll("#cred-add, #cred button").forEach(function (b) { b.disabled = lock; });
     if (!saveArm) $("btn-save").textContent = SAVED ? "Guardar corrección" : "Guardar recibo";
     if (lock && SAVED.verificado) { e.className = "estado lock"; e.textContent = "✔ Verificado por la oficina" + (SAVED.verificadoPor ? " (" + SAVED.verificadoPor + ")" : "") + ". Ya no se puede cambiar. Si hay un error, avísale a la oficina."; }
     else if (lock && SAVED.ajustado) { e.className = "estado lock"; e.textContent = "🔒 La oficina revisó y ajustó las cantidades de este recibo" + (SAVED.ajustadoEl ? " (" + when(SAVED.ajustadoEl) + ")" : "") + ". Ya no se puede cambiar. Si tienes dudas, habla con la oficina."; }
@@ -281,6 +321,12 @@ h2 { font-family: var(--f-display); font-size: 1.05rem; margin: 0; }
   var LOGO = "";
   fetch("/logo.png").then(function (r) { return r.blob(); }).then(function (b) { var fr = new FileReader(); fr.onload = function () { LOGO = fr.result; }; fr.readAsDataURL(b); }).catch(function () {});
   function escH(s) { return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]; }); }
+  function creditoHtml(cr) {
+    if (!cr || !cr.length) return "";
+    var t = 0, rows = cr.map(function (c) { t += c.monto || 0; return "<tr><td>" + escH(c.cliente || "—") + "</td><td>" + escH(c.factura || "—") + '</td><td class="n">' + fmt(c.monto || 0) + "</td></tr>"; }).join("");
+    return '<div class="c"><b>Clientes a crédito</b> <span class="m">(solo informativo, no suma al total)</span><table><thead><tr><th>Cliente</th><th>Factura</th><th class="n">Monto</th></tr></thead><tbody>' + rows +
+      '</tbody><tfoot><tr><td colspan="2">Total a crédito</td><td class="n">' + fmt(t) + "</td></tr></tfoot></table></div>";
+  }
   function reciboHtml(r) {
     var s = sums(r), rows = "", last = "";
     DENOMS.forEach(function (d) {
@@ -310,7 +356,7 @@ h2 { font-family: var(--f-display); font-size: 1.05rem; margin: 0; }
       '<div class="c kv"><b>Billetes</b><span class="n">' + fmt(s.bill) + '</span><b>Monedas</b><span class="n">' + fmt(s.mon) + "</span>" +
       '<b>ACH</b><span class="n">' + fmt(r.ach) + '</span><b>Yappy</b><span class="n">' + fmt(r.yappy) + '</span><b>Cheque</b><span class="n">' + fmt(r.cheque) + "</span>" +
       (r.refs ? "<b>Referencias</b><span>" + escH(r.refs) + "</span>" : "") + (r.notas ? "<b>Observaciones</b><span>" + escH(r.notas) + "</span>" : "") + "</div>" +
-      '<div class="t"><span>Total entregado</span><span>' + fmt(s.total) + "</span></div>" +
+      '<div class="t"><span>Total entregado</span><span>' + fmt(s.total) + "</span></div>" + creditoHtml(r.credito) +
       '<p class="m">Copia del recibo guardado en el sistema de Caja de Choferes · Tasty Choice.</p><button onclick="print()">Imprimir o guardar en PDF</button>' +
       "</div></body></html>";
   }
@@ -328,6 +374,10 @@ h2 { font-family: var(--f-display); font-size: 1.05rem; margin: 0; }
     if (r.ach) lines.push("ACH: " + fmt(r.ach)); if (r.yappy) lines.push("Yappy: " + fmt(r.yappy)); if (r.cheque) lines.push("Cheque: " + fmt(r.cheque));
     lines.push("TOTAL ENTREGADO: " + fmt(s.total));
     if (r.refs) lines.push("Referencias: " + r.refs); if (r.notas) lines.push("Obs.: " + r.notas);
+    if (r.credito && r.credito.length) {
+      lines.push("", "CLIENTES A CRÉDITO (informativo, no suma):");
+      r.credito.forEach(function (c) { lines.push("- " + (c.cliente || "-") + (c.factura ? " · Fact. " + c.factura : "") + ": " + fmt(c.monto || 0)); });
+    }
     return lines.join("\n");
   }
   $("btn-copy").addEventListener("click", function () {

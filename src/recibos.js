@@ -21,7 +21,18 @@ function out(r) {
     verificado: r.verificado, verificadoPor: r.verificado_por_nombre || null, verificadoEl: r.verificado_el,
     enviadoPor: r.enviado_por_nombre || null, origen: r.origen, alterado: r.alterado, correcciones: r.correcciones || 0,
     ajustado: !!r.ajustado_el, ajustadoPor: r.ajustado_por_nombre || null, ajustadoEl: r.ajustado_el || null,
+    credito: Array.isArray(r.credito) ? r.credito : [],
   };
+}
+
+// Clientes a crédito (solo informativo; NO entra en ningún total del recibo).
+function creditoLimpio(v) {
+  if (!Array.isArray(v)) return [];
+  return v.slice(0, 60).map((x) => ({
+    cliente: String((x && x.cliente) || "").trim().slice(0, 120),
+    factura: String((x && x.factura) || "").trim().slice(0, 40),
+    monto: toCents(x && x.monto),
+  })).filter((x) => x.cliente || x.factura || x.monto);
 }
 
 // Normaliza lo que llega del navegador o de un archivo. Los totales SIEMPRE se recalculan aquí.
@@ -32,6 +43,7 @@ function limpiar(x) {
   return {
     conteo, ach, yappy, cheque, efectivo: s.efectivo, total: s.total,
     ruta: String(x.ruta || "").slice(0, 120), refs: String(x.refs || "").slice(0, 500), notas: String(x.notas || "").slice(0, 2000),
+    credito: creditoLimpio(x.credito),
   };
 }
 
@@ -55,13 +67,13 @@ async function escribir(c, d, opts) {
   if (prev) await guardarVersion(c, prev, opts.motivo || "Reemplazado", opts.usuarioId);
   const params = [d.fecha, d.fechaVenta, d.choferId, d.ruta, JSON.stringify(d.conteo), d.ach, d.yappy, d.cheque, d.efectivo, d.total,
     d.refs, d.notas, opts.usuarioId || null, opts.origen || "chofer", !!opts.alterado, opts.guardado || new Date().toISOString(), !!opts.verificado,
-    opts.correcciones || 0];
+    opts.correcciones || 0, JSON.stringify(d.credito || [])];
   const { rows } = await c.query(`
-    INSERT INTO recibos (fecha, fecha_venta, chofer_id, ruta, conteo, ach_c, yappy_c, cheque_c, efectivo_c, total_c, refs, notas, enviado_por, origen, alterado, guardado, verificado, correcciones)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+    INSERT INTO recibos (fecha, fecha_venta, chofer_id, ruta, conteo, ach_c, yappy_c, cheque_c, efectivo_c, total_c, refs, notas, enviado_por, origen, alterado, guardado, verificado, correcciones, credito)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
     ON CONFLICT (fecha, chofer_id) DO UPDATE SET
       fecha_venta = EXCLUDED.fecha_venta, ruta = EXCLUDED.ruta, conteo = EXCLUDED.conteo, ach_c = EXCLUDED.ach_c, yappy_c = EXCLUDED.yappy_c,
-      cheque_c = EXCLUDED.cheque_c, efectivo_c = EXCLUDED.efectivo_c, total_c = EXCLUDED.total_c, refs = EXCLUDED.refs, notas = EXCLUDED.notas,
+      cheque_c = EXCLUDED.cheque_c, efectivo_c = EXCLUDED.efectivo_c, total_c = EXCLUDED.total_c, refs = EXCLUDED.refs, notas = EXCLUDED.notas, credito = EXCLUDED.credito,
       enviado_por = EXCLUDED.enviado_por, origen = EXCLUDED.origen, alterado = EXCLUDED.alterado, guardado = EXCLUDED.guardado,
       verificado = EXCLUDED.verificado, verificado_por = NULL, verificado_el = NULL, correcciones = EXCLUDED.correcciones,
       ajustado_por = NULL, ajustado_el = NULL, actualizado = now()
