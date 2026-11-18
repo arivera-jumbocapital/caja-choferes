@@ -646,11 +646,9 @@ details.day .scroll { padding: 6px 10px 10px; }
     const rB = el("tbody"); for (const r of R) rB.append(el("tr", {}, td(r.ruta || "—", "l"), td(r.chofer, "l"), td(fmt(sums(r).efec))));
     $("h1-rutas").replaceChildren(el("thead", {}, el("tr", {}, th("Ruta", "l"), th("Conductor", "l"), th("Depósito"))), rB, el("tfoot", {}, el("tr", {}, td("Total", "l"), td(""), td(fmt(sumBy((r) => sums(r).efec))))));
     const T = totals();
-    const tla = el("input", { type: "number", step: "0.01", min: "0", inputmode: "decimal", value: T.tla ? (T.tla / 100).toFixed(2) : "", placeholder: "0.00", "aria-label": "Depósito TLA slip" });
-    tla.addEventListener("change", () => setCierre((c) => { c.tla = toCents(tla.value); }));
     const kv = (a, b, strong) => [el("span", { class: strong ? "strong" : "", text: a }), typeof b === "string" ? el("span", { class: strong ? "strong" : "", text: b }) : el("span", {}, b)];
-    $("h1-banco").replaceChildren(...kv("Yappy", fmt(T.yap)), ...kv("Efectivo", fmt(T.efec)), ...kv("Depósito TLA slip", tla), ...kv("ACH", fmt(T.ach)), ...kv("Cheque", fmt(T.chq)),
-      ...kv("Total depósito banco", fmt(T.yap + T.efec + T.tla + T.ach + T.chq), true), ...kv("Total de facturación", fmt(T.venta), true),
+    $("h1-banco").replaceChildren(...kv("Yappy", fmt(T.yap)), ...kv("Efectivo", fmt(T.efec)), ...kv("ACH", fmt(T.ach)), ...kv("Cheque", fmt(T.chq)),
+      ...kv("Total depósito banco", fmt(T.yap + T.efec + T.ach + T.chq), true), ...kv("Total de facturación", fmt(T.venta), true),
       ...kv("Dif. depósito vs venta (faltante)", fmt(T.faltante)), ...kv("Dif. depósito vs venta (sobrante)", fmt(T.sobrante)));
   }
 
@@ -764,7 +762,7 @@ details.day .scroll { padding: 6px 10px 10px; }
     line("Total", (r) => sums(r).total); line("Venta", (r) => S.ventas[r.choferId] ?? null);
     line("Diferencia", (r) => S.ventas[r.choferId] != null ? sums(r).total - S.ventas[r.choferId] : null);
     A.push([], ["Tipo", "Dinero", "Cantidad", "Total", "", "Ruta", "Conductor", "Depósito", "", "Depósito al banco", ""]);
-    const bancoRows = [["Yappy", m(T.yap)], ["Efectivo", m(T.efec)], ["Depósito TLA Slip", m(T.tla)], ["ACH", m(T.ach)], ["Cheque", m(T.chq)], ["Total Depósito Banco", m(T.yap + T.efec + T.tla + T.ach + T.chq)], ["", ""], ["Total de Facturación", m(T.venta)], ["Dif Depósito vs Venta (Faltante)", m(T.faltante)], ["Dif Depósito vs Venta (Sobrante)", m(T.sobrante)]];
+    const bancoRows = [["Yappy", m(T.yap)], ["Efectivo", m(T.efec)], ["ACH", m(T.ach)], ["Cheque", m(T.chq)], ["Total Depósito Banco", m(T.yap + T.efec + T.ach + T.chq)], ["", ""], ["Total de Facturación", m(T.venta)], ["Dif Depósito vs Venta (Faltante)", m(T.faltante)], ["Dif Depósito vs Venta (Sobrante)", m(T.sobrante)]];
     const n = Math.max(DENOMS.length + 1, R.length + 1, bancoRows.length);
     for (let i = 0; i < n; i++) {
       const row = [];
