@@ -239,13 +239,23 @@ api.post("/sap/sincronizar", A.requiere(...OFICINA), h(async (req, res) => {
   catch (e) { console.error("SAP:", e.message); return res.json({ configurado: true, fechaVenta: fv, error: "No se pudo leer SAP en este momento." }); }
   const [{ rows: recs }, { rows: choferes }] = await Promise.all([
     q("SELECT chofer_id, ruta FROM recibos WHERE fecha = $1", [fecha]),
-    q("SELECT id, nombre, ruta, camion_sap FROM choferes WHERE activo"),
+    q("SELECT id, nombre, ruta, camion_sap FROM choferes WHERE activo ORDER BY orden, nombre"),
   ]);
   const recibos = Object.fromEntries(recs.map((r) => [r.chofer_id, r]));
   const montos = {}, camiones = [], sinAsignar = [], sinAsignarFilas = [];
   const det = (f) => ({ camion: f.camion, documentos: Number(f.documentos), facturado: Number(f.facturado_c), merma: Number(f.merma_c), devolucion: Number(f.devolucion_c), neto: Number(f.neto_c) });
+  const noTitular = []; // choferes que comparten camión con otro: la venta del camión va al primero de la lista (el titular)
   for (const f of filas) {
     if (f.camion === "Sin camion") continue;
+    // Camión compartido: el mismo "Camión SAP" está en dos o más choferes activos. Ambos entregan recibo; la venta del camión
+    // se guarda en el primero de la lista y en el Panel la diferencia se calcula con los recibos de todos.
+    const mismos = choferes.filter((ch) => ch.camion_sap && normTxt(ch.camion_sap) === normTxt(f.camion));
+    if (mismos.length > 1) {
+      montos[mismos[0].id] = (montos[mismos[0].id] || 0) + Number(f.neto_c);
+      noTitular.push(...mismos.slice(1).map((x) => x.id));
+      camiones.push({ ...det(f), choferId: mismos[0].id, comparten: mismos.map((x) => x.id) });
+      continue;
+    }
     const empate = [];
     const id = choferDeCamion(f.camion, choferes, recibos, empate);
     if (!id) { sinAsignar.push(f.camion); sinAsignarFilas.push({ ...det(f), empate: empate.map((e) => (choferes.find((x) => x.id === e) || {}).nombre || e) }); continue; }
@@ -260,6 +270,9 @@ api.post("/sap/sincronizar", A.requiere(...OFICINA), h(async (req, res) => {
         WHERE ventas.origen = 'sap' AND ventas.monto_c <> EXCLUDED.monto_c`, [fecha, cid, monto]);
       cambios += rowCount;
     }
+    // Si antes la venta de un camión compartido quedó en el otro chofer, se quita (solo la que llenó SAP, nunca una escrita a mano).
+    const sueltos = noTitular.filter((id) => !(id in montos));
+    if (sueltos.length) cambios += (await c.query("DELETE FROM ventas WHERE fecha = $1 AND origen = 'sap' AND chofer_id = ANY($2)", [fecha, sueltos])).rowCount;
     if (cambios) await audit(c, req.user.id, "venta_sap", { fecha, fechaVenta: fv, montos });
   });
   res.json({ configurado: true, fechaVenta: fv, consultado: filas[0] ? filas[0].consultado : null, camiones, sinAsignar, sinAsignarFilas, cambios });

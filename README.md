@@ -82,6 +82,7 @@ Al abrir un día en el **Panel**, el portal lee SAP (facturas y notas de crédit
 - Una venta **escrita a mano no se reemplaza**. Si se borra, vuelve la de SAP.
 - SAP se lee como máximo cada 15 minutos por día; pasados 2 días la cifra queda fija. El botón **Actualizar SAP** (junto a Descargar reporte Excel) lo vuelve a leer en el momento (mínimo 1 minuto entre lecturas).
 - **Tabla "Facturación SAP" en el Panel:** muestra cada camión con su chofer, documentos, facturado, merma, devolución y neto del día de venta, aunque el chofer no haya entregado recibo. Los camiones sin chofer (o con **empate**, cuando el mismo camión SAP está en dos choferes activos) salen aparte y **no suman** en la Facturación.
+- **Camión compartido:** si dos o más choferes activos tienen el mismo "Camión SAP", cada uno entrega su recibo. La venta del camión se guarda una sola vez (en el primero de la lista) y en el Panel la diferencia se calcula contra la suma de los recibos de todos los que comparten el camión. Los demás aparecen con la etiqueta "Camión compartido".
 
 ## Reglas que respeta el servidor
 

@@ -447,13 +447,26 @@ details.day .scroll { padding: 6px 10px 10px; }
   }
   // Un chofer puede tener más de un recibo en la misma fecha (recibos adicionales que emite la oficina).
   // La venta del chofer va en su primer recibo y la diferencia usa el total de TODOS sus recibos de ese día.
+  // Camión compartido: si dos o más choferes activos tienen el mismo "Camión SAP", ambos entregan recibo y la venta del
+  // camión (que SAP guarda en el primero de la lista, el titular) se compara contra los recibos de todos.
+  const normCam = (x) => String(x || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+  function grupos() {
+    const by = {}, g = {};
+    for (const c of DB.choferes) { const k = c.activo === false ? "" : normCam(c.camionSap); if (k) (by[k] = by[k] || []).push(c.id); }
+    for (const [k, ids] of Object.entries(by)) if (ids.length > 1) for (const id of ids) g[id] = { key: "cam:" + k, camion: k, titular: ids[0], miembros: ids };
+    return g;
+  }
+  const nombreDe = (id) => (DB.choferes.find((c) => c.id === id) || {}).nombre || id;
   function ventaDif(rs, ventas, conCred) {
+    const G = grupos(), key = (id) => (G[id] ? G[id].key : id);
     const tot = {}, first = {}, out = new Map();
-    for (const r of rs) tot[r.choferId] = (tot[r.choferId] || 0) + sums(r).total + (conCred ? credOf(r) : 0);
-    for (const r of [...rs].sort((a, b) => (a.adicional || 0) - (b.adicional || 0))) if (!first[r.choferId]) first[r.choferId] = r;
+    for (const r of rs) tot[key(r.choferId)] = (tot[key(r.choferId)] || 0) + sums(r).total + (conCred ? credOf(r) : 0);
+    for (const r of [...rs].sort((a, b) => (a.adicional || 0) - (b.adicional || 0))) if (!first[key(r.choferId)]) first[key(r.choferId)] = r;
+    const ventaG = (id) => { const ids = G[id] ? G[id].miembros : [id], vs = ids.map((x) => ventas[x]).filter((v) => v != null); return vs.length ? vs.reduce((a, b) => a + b, 0) : null; };
     for (const r of rs) {
-      const adic = first[r.choferId] !== r, v = adic ? null : ventas[r.choferId] ?? null;
-      out.set(r, { adic, venta: v, dif: v != null ? tot[r.choferId] - v : null, varios: rs.filter((x) => x.choferId === r.choferId).length > 1 });
+      const k = key(r.choferId), adic = first[k] !== r, v = adic ? null : ventaG(r.choferId);
+      const comparte = adic && !!G[r.choferId] && first[k].choferId !== r.choferId;
+      out.set(r, { adic, comparte, grupo: G[r.choferId] || null, venta: v, dif: v != null ? tot[k] - v : null, varios: rs.filter((x) => key(x.choferId) === k).length > 1 });
     }
     return out;
   }
@@ -498,7 +511,7 @@ details.day .scroll { padding: 6px 10px 10px; }
   // Crédito que anotó el chofer (no es dinero: no entra en depósitos ni en "Total entregado").
   const credOf = (r) => (r.credito || []).reduce((a, x) => a + (x.monto || 0), 0);
   // En "Recibos del día" la diferencia contra lo facturado sí cuenta el crédito: (entregado + crédito) − venta.
-  const rowCalc = (r) => { const s = sums(r), cred = credOf(r), conCred = s.total + cred; const x = S.vd.get(r) || {}; return { ...s, cred, conCred, venta: x.venta ?? null, dif: x.dif ?? null, adic: !!x.adic, varios: !!x.varios }; };
+  const rowCalc = (r) => { const s = sums(r), cred = credOf(r), conCred = s.total + cred; const x = S.vd.get(r) || {}; return { ...s, cred, conCred, venta: x.venta ?? null, dif: x.dif ?? null, adic: !!x.adic, comparte: !!x.comparte, varios: !!x.varios }; };
   const difPill = (dif) => dif == null ? el("span", { class: "pill neutral", text: "Sin venta" }) : dif === 0 ? el("span", { class: "pill good", text: "Cuadrado" }) : dif < 0 ? el("span", { class: "pill bad", text: "Faltante" }) : el("span", { class: "pill warn", text: "Sobrante" });
   const sumBy = (fn) => S.recibos.reduce((a, r) => a + (fn(r) || 0), 0);
   const denomCount = (k) => sumBy((r) => r.conteo?.[k]);
@@ -509,7 +522,19 @@ details.day .scroll { padding: 6px 10px 10px; }
     load(); renderAll();
     api("PUT", "/api/ventas", { fecha: f, choferId: cid, monto }).then(() => pStatus("Venta guardada.", "ok")).catch((e) => { if (before == null) delete d.ventas[cid]; else d.ventas[cid] = before; load(); renderAll(); fail(e); });
   }
-  const ventaInput = (r) => { if (S.vd.get(r)?.adic) return el("span", { class: "muted small", title: "La venta del chofer está en su primer recibo; la diferencia suma todos sus recibos del día", text: "En su 1.er recibo" }); const v = S.ventas[r.choferId]; const i = el("input", { type: "number", step: "0.01", min: "0", inputmode: "decimal", value: v != null ? (v / 100).toFixed(2) : "", placeholder: "0.00", "aria-label": "Venta de " + r.chofer }); i.addEventListener("click", (e) => e.stopPropagation()); i.addEventListener("change", () => saveVenta(r.choferId, i.value)); return i; };
+  const ventaInput = (r) => {
+    const x = S.vd.get(r) || {};
+    if (x.comparte) return el("span", { class: "muted small", title: "Comparte el camión " + x.grupo.camion + ": la venta del camión está en el primer recibo del grupo y la diferencia suma los recibos de todos", text: "Camión compartido" });
+    if (x.adic) return el("span", { class: "muted small", title: "La venta del chofer está en su primer recibo; la diferencia suma todos sus recibos del día", text: "En su 1.er recibo" });
+    if (x.grupo) {
+      // Venta del camión compartido: se guarda en el titular y se borra la de los demás para no contarla dos veces.
+      const g = x.grupo, v = x.venta;
+      const i = el("input", { type: "number", step: "0.01", min: "0", inputmode: "decimal", value: v != null ? (v / 100).toFixed(2) : "", placeholder: "0.00", "aria-label": "Venta del camión de " + g.miembros.map(nombreDe).join(" y "), title: "Venta del camión compartido por " + g.miembros.map(nombreDe).join(" y ") });
+      i.addEventListener("click", (e) => e.stopPropagation());
+      i.addEventListener("change", () => { saveVenta(g.titular, i.value); for (const o of g.miembros) if (o !== g.titular && S.ventas[o] != null) saveVenta(o, ""); });
+      return i;
+    }
+    const v = S.ventas[r.choferId]; const i = el("input", { type: "number", step: "0.01", min: "0", inputmode: "decimal", value: v != null ? (v / 100).toFixed(2) : "", placeholder: "0.00", "aria-label": "Venta de " + r.chofer }); i.addEventListener("click", (e) => e.stopPropagation()); i.addEventListener("change", () => saveVenta(r.choferId, i.value)); return i; };
   function totals() {
     const efec = sumBy((r) => sums(r).efec), ach = sumBy((r) => r.ach), yap = sumBy((r) => r.yappy), chq = sumBy((r) => r.cheque);
     const venta = Object.values(S.ventas).reduce((a, v) => a + v, 0);
@@ -554,7 +579,7 @@ details.day .scroll { padding: 6px 10px 10px; }
       const tr = el("tr", { class: "click" + (S.selected === r.id ? " sel" : ""), tabindex: "0" },
         td(nomR(r), "l"), td(r.ruta || "—", "l muted"), td(fmt(c.efec)), td(fmtOr(r.ach)), td(fmtOr(r.yappy)), td(fmtOr(r.cheque)), td(fmtOr(c.cred)), td(fmt(c.conCred)),
         el("td", {}, ventaInput(r)), (() => { const t = td(c.dif == null ? "—" : fmt(c.dif), c.dif < 0 ? "neg" : c.dif > 0 ? "pos" : ""); if (c.varios && !c.adic) t.title = "Suma todos los recibos del chofer en este día"; return t; })(),
-        el("td", { class: "l" }, c.adic ? el("span", { class: "pill neutral", text: "Adicional" }) : difPill(c.dif)),
+        el("td", { class: "l" }, c.comparte ? el("span", { class: "pill neutral", text: "Camión compartido" }) : c.adic ? el("span", { class: "pill neutral", text: "Adicional" }) : difPill(c.dif)),
         el("td", { class: "l" }, el("label", { class: "check" }, ver, "Verificado"), r.alterado ? el("span", { class: "pill bad", title: "El archivo se modificó a mano después de que el chofer lo guardó", text: "Archivo modificado" }) : null, r.correcciones ? el("span", { class: "pill warn", title: "El chofer ya usó su única corrección; el recibo quedó cerrado para él", text: "Corregido 1 vez" }) : null, r.ajustado ? el("span", { class: "pill warn", title: "La oficina corrigió el recibo (billetes, monedas, ACH, Yappy o cheque)" + (r.ajustadoPor ? " (" + r.ajustadoPor + ")" : ""), text: "Ajustado por oficina" }) : null, r.origen === "oficina" ? el("span", { class: "pill neutral", title: "Recibo emitido por la oficina" + (r.enviadoPor ? " (" + r.enviadoPor + ")" : ""), text: "Emitido por oficina" }) : null));
       const pick = () => { S.selected = r.id; renderPanel(); };
       tr.addEventListener("click", pick); tr.addEventListener("keydown", (e) => { if (e.key === "Enter" && e.target === tr) pick(); });
@@ -974,7 +999,7 @@ details.day .scroll { padding: 6px 10px 10px; }
     const tot = (rs, k) => rs.reduce((a, x) => a + (x[k] || 0), 0);
     const fila = (x, chofer, cls = "") => el("tr", { class: cls }, td(x.camion, "l"), td(chofer, "l"), td(x.documentos ?? "—"), td(fmt(x.facturado || 0)), td(fmtOr(x.merma)), td(fmtOr(x.devolucion)), td(fmt(x.neto || 0), (x.neto || 0) < 0 ? "neg" : ""));
     const recibio = new Set(S.recibos.map((r) => r.choferId));
-    const body = el("tbody", {}, ...(filas.length ? filas.map((x) => fila(x, nombre(x.choferId) + (recibio.has(x.choferId) ? "" : " · sin recibo"))) : [el("tr", {}, el("td", { colspan: "7", class: "l" }, el("div", { class: "empty", text: "SAP no tiene facturación de rutas para ese día." })))]));
+    const body = el("tbody", {}, ...(filas.length ? filas.map((x) => fila(x, (x.comparten || [x.choferId]).map((id) => nombre(id) + (recibio.has(id) ? "" : " · sin recibo")).join(" / ") + ((x.comparten || []).length > 1 ? " (camión compartido)" : ""))) : [el("tr", {}, el("td", { colspan: "7", class: "l" }, el("div", { class: "empty", text: "SAP no tiene facturación de rutas para ese día." })))]));
     const foot = el("tfoot", {}, el("tr", {}, td("Total rutas", "l"), td(""), td(tot(filas, "documentos")), td(fmt(tot(filas, "facturado"))), td(fmt(tot(filas, "merma"))), td(fmt(tot(filas, "devolucion"))), td(fmt(tot(filas, "neto")))));
     const extra = sinCh.length ? el("div", {}, el("h3", { text: "Camiones sin chofer asignado (no suman)" }),
       el("p", { class: "muted small", text: "Para que sumen, en Lista de choferes escribe su código en \"Camión SAP\" de un solo chofer activo. Si sale \"Empate\", ese camión está en dos choferes: déjalo solo en el que maneja ese camión (o quita al que ya no trabaja)." }),
