@@ -89,7 +89,7 @@ Al abrir un día en el **Panel**, el portal lee SAP (facturas y notas de crédit
 - Si hace falta darle otra oportunidad, la oficina puede eliminar el recibo (queda copia en Historial) para que el chofer lo registre de nuevo.
 - Un recibo **verificado** ya no lo puede cambiar el chofer.
 - El chofer puede anotar **clientes a crédito** (cliente, factura y monto). Son informativos: no suman al total entregado ni a los depósitos. En el Panel (*Recibos del día*) la columna **Crédito** sí entra en el Total para calcular la diferencia contra lo facturado.
-- **Gerencia y asistentes pueden corregir la cantidad de billetes y monedas** de un recibo (Panel → detalle → *Corregir cantidades*). Los totales se recalculan en el servidor, la versión del chofer queda en Historial, el recibo muestra "Ajustado por oficina" y el chofer ya no puede cambiarlo.
+- **Gerencia y asistentes pueden corregir la cantidad de billetes y monedas y los montos de ACH, Yappy y cheque** de un recibo (Panel → detalle → *Corregir recibo*). Los totales se recalculan en el servidor, la versión del chofer queda en Historial, el recibo muestra "Ajustado por oficina" y el chofer ya no puede cambiarlo.
 - Corregir, reemplazar, importar encima o eliminar un recibo guarda la versión anterior (*Historial e importar → Versiones guardadas aparte*, con botón Restaurar).
 - Los choferes con recibos no se borran de la lista: quedan inactivos.
 - Montos en centavos enteros; totales recalculados en el servidor.

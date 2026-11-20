@@ -540,7 +540,7 @@ details.day .scroll { padding: 6px 10px 10px; }
         td(r.chofer, "l"), td(r.ruta || "—", "l muted"), td(fmt(c.efec)), td(fmtOr(r.ach)), td(fmtOr(r.yappy)), td(fmtOr(r.cheque)), td(fmtOr(c.cred)), td(fmt(c.conCred)),
         el("td", {}, ventaInput(r)), td(c.dif == null ? "—" : fmt(c.dif), c.dif < 0 ? "neg" : c.dif > 0 ? "pos" : ""),
         el("td", { class: "l" }, difPill(c.dif)),
-        el("td", { class: "l" }, el("label", { class: "check" }, ver, "Verificado"), r.alterado ? el("span", { class: "pill bad", title: "El archivo se modificó a mano después de que el chofer lo guardó", text: "Archivo modificado" }) : null, r.correcciones ? el("span", { class: "pill warn", title: "El chofer ya usó su única corrección; el recibo quedó cerrado para él", text: "Corregido 1 vez" }) : null, r.ajustado ? el("span", { class: "pill warn", title: "La oficina corrigió la cantidad de billetes o monedas" + (r.ajustadoPor ? " (" + r.ajustadoPor + ")" : ""), text: "Ajustado por oficina" }) : null));
+        el("td", { class: "l" }, el("label", { class: "check" }, ver, "Verificado"), r.alterado ? el("span", { class: "pill bad", title: "El archivo se modificó a mano después de que el chofer lo guardó", text: "Archivo modificado" }) : null, r.correcciones ? el("span", { class: "pill warn", title: "El chofer ya usó su única corrección; el recibo quedó cerrado para él", text: "Corregido 1 vez" }) : null, r.ajustado ? el("span", { class: "pill warn", title: "La oficina corrigió el recibo (billetes, monedas, ACH, Yappy o cheque)" + (r.ajustadoPor ? " (" + r.ajustadoPor + ")" : ""), text: "Ajustado por oficina" }) : null));
       const pick = () => { S.selected = r.id; renderPanel(); };
       tr.addEventListener("click", pick); tr.addEventListener("keydown", (e) => { if (e.key === "Enter" && e.target === tr) pick(); });
       body.append(tr);
@@ -559,7 +559,14 @@ details.day .scroll { padding: 6px 10px 10px; }
     if (editando) {
       // Modo corrección: la oficina escribe la cantidad de piezas; montos y totales se recalculan solos.
       const efecTd = td(""), totTd = td("");
-      const recalc = () => { let e = 0; for (const d of DENOMS) e += (EDIT.conteo[d.k] || 0) * d.cents; efecTd.textContent = fmt(e); totTd.textContent = fmt(e + c.otros); };
+      const otrosTd = td("");
+      const recalc = () => { let e = 0; for (const d of DENOMS) e += (EDIT.conteo[d.k] || 0) * d.cents; const o = EDIT.ach + EDIT.yappy + EDIT.cheque; efecTd.textContent = fmt(e); otrosTd.textContent = fmt(o); totTd.textContent = fmt(e + o); };
+      const OTROS = [["ach", "ACH"], ["yappy", "Yappy"], ["cheque", "Cheque"]];
+      const otrosRows = OTROS.map(([k, label]) => {
+        const i = el("input", { type: "number", min: "0", step: "0.01", inputmode: "decimal", value: EDIT[k] ? (EDIT[k] / 100).toFixed(2) : "", placeholder: "0.00", "aria-label": label + " en dólares", style: "max-width:110px;color:var(--ink-blue,#0a4d8f);font-weight:600" });
+        i.addEventListener("input", () => { EDIT[k] = toCents(i.value); recalc(); });
+        return el("tr", {}, td(label + " ($)", "l"), el("td", {}, i), td(""), td(r[k] ? fmt(r[k]) : "—", "muted"));
+      });
       t = el("table", { class: "ledger" }, el("thead", {}, el("tr", {}, th("Denominación", "l"), th("Cantidad"), th("Monto"), th("Antes"))),
         el("tbody", {}, ...DENOMS.map((d) => {
           const monto = td(""), antes = r.conteo?.[d.k] || 0;
@@ -568,7 +575,8 @@ details.day .scroll { padding: 6px 10px 10px; }
           i.addEventListener("input", upd); upd();
           return el("tr", {}, td(d.tipo + " " + d.label, "l"), el("td", {}, i), monto, td(antes || "—", "muted"));
         })),
-        el("tfoot", {}, el("tr", {}, td("Efectivo", "l"), td(""), efecTd, td(fmt(c.efec), "muted")), el("tr", {}, td("ACH / Yappy / Cheque", "l"), td(""), td(fmt(c.otros)), td("")), el("tr", {}, td("Total entregado", "l"), td(""), totTd, td(fmt(c.total), "muted"))));
+        el("tbody", {}, el("tr", {}, td("Efectivo", "l strong"), td(""), efecTd, td(fmt(c.efec), "muted")), ...otrosRows),
+        el("tfoot", {}, el("tr", {}, td("ACH / Yappy / Cheque", "l"), td(""), otrosTd, td(fmt(c.otros), "muted")), el("tr", {}, td("Total entregado", "l"), td(""), totTd, td(fmt(c.total), "muted"))));
       recalc();
     } else {
       t = el("table", { class: "ledger" }, el("thead", {}, el("tr", {}, th("Denominación", "l"), th("Cantidad"), th("Monto"))),
@@ -585,18 +593,18 @@ details.day .scroll { padding: 6px 10px 10px; }
     const del = el("button", { class: "danger", text: delArm ? "Confirmar: eliminar recibo" : "Eliminar recibo", onclick: () => { if (!delArm) { delArm = true; renderDetail(); setTimeout(() => { delArm = false; renderDetail(); }, 5000); return; } delArm = false; api("DELETE", "/api/recibos/" + r.dbId).then(() => { S.selected = null; pStatus("Recibo eliminado. La copia quedó en \"Versiones guardadas aparte\" (Historial).", "ok"); return refresh(); }).catch(fail); } });
     let botones = [del];
     if (can.oficina && editando) {
-      const guardar = el("button", { class: "primary", text: "Guardar cantidades", onclick: async () => {
+      const guardar = el("button", { class: "primary", text: "Guardar corrección", onclick: async () => {
         guardar.disabled = true;
         try {
-          await api("PUT", "/api/recibos/" + r.dbId + "/conteo", { conteo: EDIT.conteo });
-          EDIT = null; pStatus("Cantidades corregidas. La versión del chofer quedó guardada en Historial.", "ok"); await refresh();
+          await api("PUT", "/api/recibos/" + r.dbId + "/conteo", { conteo: EDIT.conteo, ach: EDIT.ach, yappy: EDIT.yappy, cheque: EDIT.cheque });
+          EDIT = null; pStatus("Recibo corregido. La versión del chofer quedó guardada en Historial.", "ok"); await refresh();
         } catch (e) { guardar.disabled = false; fail(e); }
       } });
       botones = [guardar, el("button", { text: "Cancelar", onclick: () => { EDIT = null; renderDetail(); } })];
     } else if (can.oficina) {
-      botones = [el("button", { text: "Corregir cantidades", title: "Cambiar la cantidad de billetes y monedas que escribió el chofer", onclick: () => { EDIT = { id: r.id, conteo: { ...(r.conteo || {}) } }; renderDetail(); } }), del];
+      botones = [el("button", { text: "Corregir recibo", title: "Cambiar la cantidad de billetes y monedas, o los montos de ACH, Yappy y cheque que escribió el chofer", onclick: () => { EDIT = { id: r.id, conteo: { ...(r.conteo || {}) }, ach: r.ach || 0, yappy: r.yappy || 0, cheque: r.cheque || 0 }; renderDetail(); } }), del];
     }
-    box.replaceChildren(el("h2", { text: r.chofer }), meta, editando ? el("div", { class: "notice warn", text: "Escribe la cantidad correcta de piezas. Los montos y el total se calculan solos. La versión del chofer queda guardada en Historial y el chofer ya no podrá cambiar este recibo." }) : null, el("div", { class: "scroll" }, t), ...extra, can.oficina ? el("div", { class: "btns" }, ...botones) : null);
+    box.replaceChildren(...[el("h2", { text: r.chofer }), meta, editando ? el("div", { class: "notice warn", text: "Escribe la cantidad correcta de piezas y los montos de ACH, Yappy y cheque en dólares. Los totales se calculan solos. La versión del chofer queda guardada en Historial y el chofer ya no podrá cambiar este recibo." }) : null, el("div", { class: "scroll" }, t), ...extra, can.oficina ? el("div", { class: "btns" }, ...botones) : null].filter(Boolean));
   }
   let EDIT = null; // recibo cuyas cantidades está corrigiendo la oficina
 
