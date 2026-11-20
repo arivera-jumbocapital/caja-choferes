@@ -230,6 +230,7 @@ details.day .scroll { padding: 6px 10px 10px; }
   <!-- PANEL -->
   <section id="view-panel" class="stack" hidden>
     <div class="panel"><div class="kpis" id="kpis"></div><div id="pend"></div></div>
+    <div class="panel" id="sap-tabla" hidden></div>
     <div class="panel">
       <div class="btns" style="justify-content:space-between"><h2 style="margin:0">Recibos del día</h2><button id="btn-emitir" class="primary" hidden title="Registrar un recibo a nombre de un chofer (por ejemplo, una ruta que terminó al día siguiente)">Emitir recibo</button></div>
       <p class="muted small">Los recibos llegan solos cuando el chofer los guarda (la página se actualiza cada minuto). La venta se llena sola desde SAP (o escríbela a mano). Aquí el <b>Total</b> incluye el <b>crédito</b> que anotó el chofer, y la diferencia es Total − Venta. Toca una fila para ver el desglose.</p>
@@ -490,7 +491,7 @@ details.day .scroll { padding: 6px 10px 10px; }
   document.addEventListener("focusout", () => setTimeout(() => { for (const id of [...held]) renderSection(id); }, 0));
   function renderSection(id) { ({ "view-panel": () => guarded(id, renderPanel), "view-hoja1": () => guarded(id, renderHoja1), "view-hoja2": () => guarded(id, renderHoja2) })[id]?.(); }
   function renderAll() {
-    renderSection("view-panel"); renderSection("view-hoja1"); renderSection("view-hoja2"); renderBackup();
+    renderSapTabla(); renderSection("view-panel"); renderSection("view-hoja1"); renderSection("view-hoja2"); renderBackup();
     if (!$("view-graficas").hidden) renderExec();
     if (!$("view-presentacion").hidden && !$("deck").contains(document.activeElement)) renderDeck();
   }
@@ -960,6 +961,29 @@ details.day .scroll { padding: 6px 10px 10px; }
     else if (j.error) pStatus(j.error + " Intenta de nuevo en unos minutos.", "err");
     else pStatus("SAP actualizado" + (j.consultado ? " (leído " + when(j.consultado) + ")" : "") + ": venta del " + longDate(j.fechaVenta) + (j.cambios ? " · " + j.cambios + " venta(s) cambiaron" : " · sin cambios") + ".", "ok");
   });
+  // Facturación de SAP por camión y chofer, aunque el chofer todavía no haya entregado su recibo.
+  function renderSapTabla() {
+    const box = $("sap-tabla"), I = SAPINFO;
+    if (!can.oficina || !I || I.configurado === false) { box.hidden = true; return; }
+    box.hidden = false;
+    const titulo = el("h2", { text: "Facturación SAP · venta del " + longDate(I.fechaVenta || prevDay(S.pFecha)) });
+    if (I.error) { box.replaceChildren(titulo, el("div", { class: "notice warn", text: I.error + " Pulsa \"Actualizar SAP\" en unos minutos." })); return; }
+    const nombre = (id) => (DB.choferes.find((c) => c.id === id) || {}).nombre || id;
+    const filas = [...(I.camiones || [])].sort((a, b) => a.camion.localeCompare(b.camion));
+    const sinCh = I.sinAsignarFilas || [];
+    const tot = (rs, k) => rs.reduce((a, x) => a + (x[k] || 0), 0);
+    const fila = (x, chofer, cls = "") => el("tr", { class: cls }, td(x.camion, "l"), td(chofer, "l"), td(x.documentos ?? "—"), td(fmt(x.facturado || 0)), td(fmtOr(x.merma)), td(fmtOr(x.devolucion)), td(fmt(x.neto || 0), (x.neto || 0) < 0 ? "neg" : ""));
+    const recibio = new Set(S.recibos.map((r) => r.choferId));
+    const body = el("tbody", {}, ...(filas.length ? filas.map((x) => fila(x, nombre(x.choferId) + (recibio.has(x.choferId) ? "" : " · sin recibo"))) : [el("tr", {}, el("td", { colspan: "7", class: "l" }, el("div", { class: "empty", text: "SAP no tiene facturación de rutas para ese día." })))]));
+    const foot = el("tfoot", {}, el("tr", {}, td("Total rutas", "l"), td(""), td(tot(filas, "documentos")), td(fmt(tot(filas, "facturado"))), td(fmt(tot(filas, "merma"))), td(fmt(tot(filas, "devolucion"))), td(fmt(tot(filas, "neto")))));
+    const extra = sinCh.length ? el("div", {}, el("h3", { text: "Camiones sin chofer asignado (no suman)" }),
+      el("p", { class: "muted small", text: "Para que sumen, en Lista de choferes escribe su código en \"Camión SAP\" de un solo chofer activo. Si sale \"Empate\", ese camión está en dos choferes: déjalo solo en el que maneja ese camión (o quita al que ya no trabaja)." }),
+      el("div", { class: "scroll" }, el("table", { class: "ledger" }, el("tbody", {}, ...sinCh.map((x) => fila(x, (x.empate || []).length ? "Empate: " + x.empate.join(" / ") : "Sin chofer", "muted")))))) : null;
+    box.replaceChildren(...[titulo,
+      el("p", { class: "muted small", text: "Neto = facturado − merma − devolución. Es la venta que se llena sola en cada chofer (salvo que se haya escrito a mano)." + (I.consultado ? " Leído " + when(I.consultado) + "." : "") }),
+      el("div", { class: "scroll" }, el("table", { class: "ledger" }, el("thead", {}, el("tr", {}, th("Camión", "l"), th("Chofer", "l"), th("Documentos"), th("Facturado"), th("Merma"), th("Devolución"), th("Neto"))), body, foot)),
+      extra].filter(Boolean));
+  }
   function sapSub(T) {
     const I = SAPINFO;
     if (!I) return "Venta del " + longDate(prevDay(S.pFecha));

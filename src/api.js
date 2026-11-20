@@ -192,7 +192,7 @@ function rutaTiene(ruta, cam) {
 }
 // Chofer de un camión: camión SAP guardado (+4), ruta de su recibo del día (+3), ruta de la lista (+2), entregó ese día (+1).
 // Solo se asigna si un chofer queda claramente primero.
-function choferDeCamion(cam, choferes, recibos) {
+function choferDeCamion(cam, choferes, recibos, empate) {
   const c = choferes.map((ch) => {
     const rec = recibos[ch.id];
     let p = 0;
@@ -202,7 +202,9 @@ function choferDeCamion(cam, choferes, recibos) {
     if (p && rec) p += 1;
     return { id: ch.id, p };
   }).filter((x) => x.p > 0).sort((a, b) => b.p - a.p);
-  return c.length && (c.length === 1 || c[0].p > c[1].p) ? c[0].id : null;
+  if (c.length && (c.length === 1 || c[0].p > c[1].p)) return c[0].id;
+  if (empate && c.length) empate.push(...c.filter((x) => x.p === c[0].p).map((x) => x.id)); // choferes empatados (p. ej. el mismo camión SAP en dos choferes)
+  return null;
 }
 const sinDatos = new Map(); // fecha de venta → hora de la última consulta que no trajo nada
 // forzar (botón "Actualizar SAP"): vuelve a leer aunque el día esté cerrado, con un mínimo de 1 minuto entre lecturas.
@@ -237,16 +239,18 @@ api.post("/sap/sincronizar", A.requiere(...OFICINA), h(async (req, res) => {
   catch (e) { console.error("SAP:", e.message); return res.json({ configurado: true, fechaVenta: fv, error: "No se pudo leer SAP en este momento." }); }
   const [{ rows: recs }, { rows: choferes }] = await Promise.all([
     q("SELECT chofer_id, ruta FROM recibos WHERE fecha = $1", [fecha]),
-    q("SELECT id, ruta, camion_sap FROM choferes WHERE activo"),
+    q("SELECT id, nombre, ruta, camion_sap FROM choferes WHERE activo"),
   ]);
   const recibos = Object.fromEntries(recs.map((r) => [r.chofer_id, r]));
-  const montos = {}, camiones = [], sinAsignar = [];
+  const montos = {}, camiones = [], sinAsignar = [], sinAsignarFilas = [];
+  const det = (f) => ({ camion: f.camion, documentos: Number(f.documentos), facturado: Number(f.facturado_c), merma: Number(f.merma_c), devolucion: Number(f.devolucion_c), neto: Number(f.neto_c) });
   for (const f of filas) {
     if (f.camion === "Sin camion") continue;
-    const id = choferDeCamion(f.camion, choferes, recibos);
-    if (!id) { sinAsignar.push(f.camion); continue; }
+    const empate = [];
+    const id = choferDeCamion(f.camion, choferes, recibos, empate);
+    if (!id) { sinAsignar.push(f.camion); sinAsignarFilas.push({ ...det(f), empate: empate.map((e) => (choferes.find((x) => x.id === e) || {}).nombre || e) }); continue; }
     montos[id] = (montos[id] || 0) + Number(f.neto_c);
-    camiones.push({ camion: f.camion, choferId: id, neto: Number(f.neto_c), facturado: Number(f.facturado_c) });
+    camiones.push({ ...det(f), choferId: id });
   }
   let cambios = 0;
   await tx(async (c) => {
@@ -258,7 +262,7 @@ api.post("/sap/sincronizar", A.requiere(...OFICINA), h(async (req, res) => {
     }
     if (cambios) await audit(c, req.user.id, "venta_sap", { fecha, fechaVenta: fv, montos });
   });
-  res.json({ configurado: true, fechaVenta: fv, consultado: filas[0] ? filas[0].consultado : null, camiones, sinAsignar, cambios });
+  res.json({ configurado: true, fechaVenta: fv, consultado: filas[0] ? filas[0].consultado : null, camiones, sinAsignar, sinAsignarFilas, cambios });
 }));
 
 /* ---------- oficina: verificar, eliminar, versiones ---------- */
