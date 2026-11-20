@@ -1548,11 +1548,17 @@ document.addEventListener('keydown',function(e){if(['ArrowRight','PageDown',' ',
     if (can.gerente) { try { USUARIOS = (await api("GET", "/api/usuarios")).usuarios; } catch (e) {} }
     renderDrivers(); fillChoferSelect(); setFecha(today()); route();
     // Los recibos llegan solos: se refresca el día cada minuto si no estás escribiendo.
-    setInterval(() => {
+    // Si la página queda abierta de un día para otro, pasa sola al día nuevo (solo si estabas viendo el día de hoy).
+    let hoyVisto = today();
+    const tick = () => {
       if (document.hidden || !can.oficina || !$("stage").hidden) return;
+      const h = today();
+      if (h !== hoyVisto) { const seguir = S.pFecha === hoyVisto; hoyVisto = h; if (seguir) { setFecha(h); fetchFechas().then(renderChips).catch(() => {}); return; } }
       const a = document.activeElement; if (a && a.matches("input, textarea, [contenteditable]")) return;
       refresh().catch(() => {});
-    }, 60000);
+    };
+    setInterval(tick, 60000);
+    document.addEventListener("visibilitychange", () => { if (!document.hidden) tick(); });
   })();
 })();
 </script>
