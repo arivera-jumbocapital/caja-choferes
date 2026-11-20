@@ -85,7 +85,7 @@ api.get("/recibos/mio", A.requiere("chofer"), h(async (req, res) => {
   res.json({ recibo: r ? R.out(r) : null });
 }));
 api.get("/recibos/mios", A.requiere("chofer"), h(async (req, res) => {
-  const { rows } = await q(R.SELECT + " WHERE r.chofer_id = $1 ORDER BY r.fecha DESC LIMIT 15", [req.user.chofer_id]);
+  const { rows } = await q(R.SELECT + " WHERE r.chofer_id = $1 AND r.adicional = 0 ORDER BY r.fecha DESC LIMIT 15", [req.user.chofer_id]);
   res.json({ recibos: rows.map(R.out) });
 }));
 api.put("/recibos/mio", A.requiere("chofer"), h(async (req, res) => {
@@ -128,7 +128,7 @@ async function dias(desde, hasta) {
     q("SELECT fecha, chofer_id, monto_c FROM ventas WHERE fecha BETWEEN $1 AND $2", [desde, hasta]),
     q("SELECT fecha, datos FROM cierres WHERE fecha BETWEEN $1 AND $2", [desde, hasta]),
   ]);
-  for (const r of rs.rows) dia(r.fecha).recibos[r.chofer_id] = R.out(r);
+  for (const r of rs.rows) dia(r.fecha).recibos[R.clave(r)] = R.out(r);
   for (const v of vs.rows) dia(v.fecha).ventas[v.chofer_id] = v.monto_c;
   for (const c of cs.rows) dia(c.fecha).cierre = c.datos;
   return out;
@@ -270,6 +270,31 @@ api.post("/recibos/:id/verificar", A.requiere(...OFICINA), h(async (req, res) =>
   await audit(null, req.user.id, v ? "verificar" : "quitar_verificado", { id: Number(req.params.id) });
   res.json({ ok: true });
 }));
+// La oficina emite un recibo a nombre de un chofer, con la fecha de entrega, la venta y la ruta que escoja.
+// Siempre queda como recibo ADICIONAL (no reemplaza el del chofer): sirve, por ejemplo, cuando el chofer termina
+// al día siguiente una ruta que no entregó completa y ese dinero entra en la caja de ese día.
+api.post("/recibos", A.requiere(...OFICINA), h(async (req, res) => {
+  const b = req.body || {};
+  const hoy = hoyPanama();
+  if (!fechaValida(b.fecha)) return bad(res, "Escribe la fecha de entrega.");
+  if (b.fecha > sumarDias(hoy, 1)) return bad(res, "La fecha de entrega no puede ser futura.");
+  if (!fechaValida(b.fechaVenta)) return bad(res, "Escribe la fecha de venta.");
+  if (b.fechaVenta > b.fecha) return bad(res, "La fecha de venta no puede ser posterior a la entrega.");
+  const { rows: ch } = await q("SELECT id, nombre FROM choferes WHERE id = $1", [String(b.choferId || "")]);
+  if (!ch[0]) return bad(res, "Escoge un chofer de la lista.");
+  const d = R.limpiar(b);
+  if (d.total === 0) return bad(res, "El recibo está en cero. Escribe al menos una cantidad.");
+  d.fecha = b.fecha; d.fechaVenta = b.fechaVenta; d.choferId = ch[0].id;
+  const r = await tx(async (c) => {
+    await c.query("SELECT pg_advisory_xact_lock(hashtext($1))", [d.fecha + "|" + d.choferId]);
+    const { rows } = await c.query("SELECT coalesce(max(adicional), 0) + 1 AS n FROM recibos WHERE fecha = $1 AND chofer_id = $2", [d.fecha, d.choferId]);
+    d.adicional = rows[0].n;
+    const w = await R.escribir(c, d, { usuarioId: req.user.id, origen: "oficina" });
+    await audit(c, req.user.id, "recibo_oficina", { fecha: d.fecha, fechaVenta: d.fechaVenta, chofer: d.choferId, adicional: d.adicional, total: d.total });
+    return R.out(await R.porId(c, w.id));
+  });
+  res.json({ recibo: r });
+}));
 // La oficina corrige la cantidad de billetes y monedas, y los montos de ACH, Yappy y cheque (el chofer a veces escribe mal o no los coloca).
 // Guarda la versión anterior, recalcula los totales en el servidor y deja el recibo cerrado para el chofer.
 api.put("/recibos/:id/conteo", A.requiere(...OFICINA), h(async (req, res) => {
@@ -325,7 +350,7 @@ api.post("/versiones/:id/restaurar", A.requiere(...OFICINA), h(async (req, res) 
     const { rows: ch } = await c.query("SELECT 1 FROM choferes WHERE id = $1", [x.choferId]);
     if (!ch[0]) return { error: "El chofer de esa versión ya no existe en la lista." };
     const d = R.limpiar(x);
-    d.fecha = x.fecha; d.fechaVenta = fechaValida(x.fechaVenta) ? x.fechaVenta : fechaVentaDe(x.fecha); d.choferId = x.choferId;
+    d.fecha = x.fecha; d.fechaVenta = fechaValida(x.fechaVenta) ? x.fechaVenta : fechaVentaDe(x.fecha); d.choferId = x.choferId; d.adicional = Math.max(0, Math.floor(Number(x.adicional) || 0));
     await R.escribir(c, d, { usuarioId: req.user.id, origen: "restaurado", alterado: !!x.alterado, guardado: x.guardado, motivo: "Reemplazado al restaurar otra versión" });
     await c.query("UPDATE recibo_versiones SET restaurado = true WHERE id = $1", [v.id]);
     await audit(c, req.user.id, "carga", { ok: true, msg: "Restaurado: " + (x.chofer || x.choferId) + " · " + x.fecha + " · $" + (d.total / 100).toFixed(2) });
@@ -439,7 +464,7 @@ api.get("/respaldo", A.requiere(...GERENTE), h(async (req, res) => {
   ]);
   const dias = {};
   const dia = (f) => (dias[f] = dias[f] || { recibos: {}, ventas: {}, cierre: {} });
-  for (const r of rs.rows) { const o = R.out(r); o.formato = "tasty-recibo-caja"; dia(r.fecha).recibos[r.chofer_id] = o; }
+  for (const r of rs.rows) { const o = R.out(r); o.formato = "tasty-recibo-caja"; dia(r.fecha).recibos[R.clave(r)] = o; }
   for (const v of vs.rows) dia(v.fecha).ventas[v.chofer_id] = v.monto_c;
   for (const c of cs.rows) dia(c.fecha).cierre = c.datos;
   await audit(null, req.user.id, "respaldo", {});

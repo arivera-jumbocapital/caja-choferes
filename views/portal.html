@@ -232,10 +232,11 @@ details.day .scroll { padding: 6px 10px 10px; }
   <section id="view-panel" class="stack" hidden>
     <div class="panel"><div class="kpis" id="kpis"></div><div id="pend"></div></div>
     <div class="panel">
-      <h2>Recibos del día</h2>
+      <div class="btns" style="justify-content:space-between"><h2 style="margin:0">Recibos del día</h2><button id="btn-emitir" class="primary" hidden title="Registrar un recibo a nombre de un chofer (por ejemplo, una ruta que terminó al día siguiente)">Emitir recibo</button></div>
       <p class="muted small">Los recibos llegan solos cuando el chofer los guarda (la página se actualiza cada minuto). La venta se llena sola desde SAP (o escríbela a mano). Aquí el <b>Total</b> incluye el <b>crédito</b> que anotó el chofer, y la diferencia es Total − Venta. Toca una fila para ver el desglose.</p>
       <div class="scroll"><table class="ledger" id="ledger"></table></div>
     </div>
+    <div class="panel" id="emitir" hidden></div>
     <div class="panel" id="detail"></div>
   </section>
 
@@ -400,13 +401,14 @@ details.day .scroll { padding: 6px 10px 10px; }
   async function fetchFechas() { const j = await api("GET", "/api/fechas"); DB.fechas = Object.fromEntries(j.fechas.map((x) => [x.fecha, x])); }
   async function fetchChoferes() { DB.choferes = (await api("GET", "/api/choferes")).choferes; }
 
-  const S = { pFecha: today(), selected: null, recibos: [], ventas: {}, cierre: {} };
+  const S = { pFecha: today(), selected: null, recibos: [], ventas: {}, cierre: {}, vd: new Map(), vdSin: new Map() };
   function load() {
     const d = DB.dias[S.pFecha] || { recibos: {}, ventas: {}, cierre: {} };
     const order = new Map(DB.choferes.map((c, i) => [c.id, i]));
     const rank = (r) => (r.tipo === "Food Services" ? 1000 : 0) + (order.has(r.choferId) ? order.get(r.choferId) : 500);
-    S.recibos = Object.values(d.recibos).map((r) => ({ ...r, id: r.fecha + "_" + r.choferId })).sort((a, b) => rank(a) - rank(b) || (a.chofer || "").localeCompare(b.chofer || ""));
+    S.recibos = Object.entries(d.recibos).map(([k, r]) => ({ ...r, key: k, id: r.fecha + "_" + k })).sort((a, b) => rank(a) - rank(b) || (a.chofer || "").localeCompare(b.chofer || "") || (a.adicional || 0) - (b.adicional || 0));
     S.ventas = d.ventas || {}; S.cierre = d.cierre || {};
+    S.vd = ventaDif(S.recibos, S.ventas, true); S.vdSin = ventaDif(S.recibos, S.ventas, false);
   }
   async function refresh() { await Promise.all([fetchDia(S.pFecha), fetchFechas()]); load(); renderAll(); }
 
@@ -443,6 +445,19 @@ details.day .scroll { padding: 6px 10px 10px; }
     let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; }
     return h.toString(36);
   }
+  // Un chofer puede tener más de un recibo en la misma fecha (recibos adicionales que emite la oficina).
+  // La venta del chofer va en su primer recibo y la diferencia usa el total de TODOS sus recibos de ese día.
+  function ventaDif(rs, ventas, conCred) {
+    const tot = {}, first = {}, out = new Map();
+    for (const r of rs) tot[r.choferId] = (tot[r.choferId] || 0) + sums(r).total + (conCred ? credOf(r) : 0);
+    for (const r of [...rs].sort((a, b) => (a.adicional || 0) - (b.adicional || 0))) if (!first[r.choferId]) first[r.choferId] = r;
+    for (const r of rs) {
+      const adic = first[r.choferId] !== r, v = adic ? null : ventas[r.choferId] ?? null;
+      out.set(r, { adic, venta: v, dif: v != null ? tot[r.choferId] - v : null, varios: rs.filter((x) => x.choferId === r.choferId).length > 1 });
+    }
+    return out;
+  }
+  const nomR = (r) => r.chofer + (r.adicional ? " (adicional · venta " + ddmm(r.fechaVenta) + ")" : "");
   function sums(r) {
     let bill = 0, mon = 0;
     for (const d of DENOMS) { const c = (r.conteo?.[d.k] || 0) * d.cents; if (d.tipo === "Billetes") bill += c; else mon += c; }
@@ -483,7 +498,7 @@ details.day .scroll { padding: 6px 10px 10px; }
   // Crédito que anotó el chofer (no es dinero: no entra en depósitos ni en "Total entregado").
   const credOf = (r) => (r.credito || []).reduce((a, x) => a + (x.monto || 0), 0);
   // En "Recibos del día" la diferencia contra lo facturado sí cuenta el crédito: (entregado + crédito) − venta.
-  const rowCalc = (r) => { const s = sums(r), cred = credOf(r), conCred = s.total + cred; const venta = S.ventas[r.choferId]; const dif = venta != null ? conCred - venta : null; return { ...s, cred, conCred, venta, dif }; };
+  const rowCalc = (r) => { const s = sums(r), cred = credOf(r), conCred = s.total + cred; const x = S.vd.get(r) || {}; return { ...s, cred, conCred, venta: x.venta ?? null, dif: x.dif ?? null, adic: !!x.adic, varios: !!x.varios }; };
   const difPill = (dif) => dif == null ? el("span", { class: "pill neutral", text: "Sin venta" }) : dif === 0 ? el("span", { class: "pill good", text: "Cuadrado" }) : dif < 0 ? el("span", { class: "pill bad", text: "Faltante" }) : el("span", { class: "pill warn", text: "Sobrante" });
   const sumBy = (fn) => S.recibos.reduce((a, r) => a + (fn(r) || 0), 0);
   const denomCount = (k) => sumBy((r) => r.conteo?.[k]);
@@ -494,7 +509,7 @@ details.day .scroll { padding: 6px 10px 10px; }
     load(); renderAll();
     api("PUT", "/api/ventas", { fecha: f, choferId: cid, monto }).then(() => pStatus("Venta guardada.", "ok")).catch((e) => { if (before == null) delete d.ventas[cid]; else d.ventas[cid] = before; load(); renderAll(); fail(e); });
   }
-  const ventaInput = (r) => { const v = S.ventas[r.choferId]; const i = el("input", { type: "number", step: "0.01", min: "0", inputmode: "decimal", value: v != null ? (v / 100).toFixed(2) : "", placeholder: "0.00", "aria-label": "Venta de " + r.chofer }); i.addEventListener("click", (e) => e.stopPropagation()); i.addEventListener("change", () => saveVenta(r.choferId, i.value)); return i; };
+  const ventaInput = (r) => { if (S.vd.get(r)?.adic) return el("span", { class: "muted small", title: "La venta del chofer está en su primer recibo; la diferencia suma todos sus recibos del día", text: "En su 1.er recibo" }); const v = S.ventas[r.choferId]; const i = el("input", { type: "number", step: "0.01", min: "0", inputmode: "decimal", value: v != null ? (v / 100).toFixed(2) : "", placeholder: "0.00", "aria-label": "Venta de " + r.chofer }); i.addEventListener("click", (e) => e.stopPropagation()); i.addEventListener("change", () => saveVenta(r.choferId, i.value)); return i; };
   function totals() {
     const efec = sumBy((r) => sums(r).efec), ach = sumBy((r) => r.ach), yap = sumBy((r) => r.yappy), chq = sumBy((r) => r.cheque);
     const venta = Object.values(S.ventas).reduce((a, v) => a + v, 0);
@@ -533,14 +548,14 @@ details.day .scroll { padding: 6px 10px 10px; }
       const ver = el("input", { type: "checkbox", "aria-label": "Verificado" }); ver.checked = !!r.verificado;
       ver.addEventListener("click", (e) => e.stopPropagation());
       ver.addEventListener("change", () => {
-        const rec = day(S.pFecha).recibos[r.choferId], v = ver.checked; if (rec) rec.verificado = v; load(); renderAll();
+        const rec = day(S.pFecha).recibos[r.key], v = ver.checked; if (rec) rec.verificado = v; load(); renderAll();
         api("POST", "/api/recibos/" + r.dbId + "/verificar", { verificado: v }).then(() => fetchDia(S.pFecha)).then(() => { load(); renderAll(); }).catch((e) => { if (rec) rec.verificado = !v; load(); renderAll(); fail(e); });
       });
       const tr = el("tr", { class: "click" + (S.selected === r.id ? " sel" : ""), tabindex: "0" },
-        td(r.chofer, "l"), td(r.ruta || "—", "l muted"), td(fmt(c.efec)), td(fmtOr(r.ach)), td(fmtOr(r.yappy)), td(fmtOr(r.cheque)), td(fmtOr(c.cred)), td(fmt(c.conCred)),
-        el("td", {}, ventaInput(r)), td(c.dif == null ? "—" : fmt(c.dif), c.dif < 0 ? "neg" : c.dif > 0 ? "pos" : ""),
-        el("td", { class: "l" }, difPill(c.dif)),
-        el("td", { class: "l" }, el("label", { class: "check" }, ver, "Verificado"), r.alterado ? el("span", { class: "pill bad", title: "El archivo se modificó a mano después de que el chofer lo guardó", text: "Archivo modificado" }) : null, r.correcciones ? el("span", { class: "pill warn", title: "El chofer ya usó su única corrección; el recibo quedó cerrado para él", text: "Corregido 1 vez" }) : null, r.ajustado ? el("span", { class: "pill warn", title: "La oficina corrigió el recibo (billetes, monedas, ACH, Yappy o cheque)" + (r.ajustadoPor ? " (" + r.ajustadoPor + ")" : ""), text: "Ajustado por oficina" }) : null));
+        td(nomR(r), "l"), td(r.ruta || "—", "l muted"), td(fmt(c.efec)), td(fmtOr(r.ach)), td(fmtOr(r.yappy)), td(fmtOr(r.cheque)), td(fmtOr(c.cred)), td(fmt(c.conCred)),
+        el("td", {}, ventaInput(r)), (() => { const t = td(c.dif == null ? "—" : fmt(c.dif), c.dif < 0 ? "neg" : c.dif > 0 ? "pos" : ""); if (c.varios && !c.adic) t.title = "Suma todos los recibos del chofer en este día"; return t; })(),
+        el("td", { class: "l" }, c.adic ? el("span", { class: "pill neutral", text: "Adicional" }) : difPill(c.dif)),
+        el("td", { class: "l" }, el("label", { class: "check" }, ver, "Verificado"), r.alterado ? el("span", { class: "pill bad", title: "El archivo se modificó a mano después de que el chofer lo guardó", text: "Archivo modificado" }) : null, r.correcciones ? el("span", { class: "pill warn", title: "El chofer ya usó su única corrección; el recibo quedó cerrado para él", text: "Corregido 1 vez" }) : null, r.ajustado ? el("span", { class: "pill warn", title: "La oficina corrigió el recibo (billetes, monedas, ACH, Yappy o cheque)" + (r.ajustadoPor ? " (" + r.ajustadoPor + ")" : ""), text: "Ajustado por oficina" }) : null, r.origen === "oficina" ? el("span", { class: "pill neutral", title: "Recibo emitido por la oficina" + (r.enviadoPor ? " (" + r.enviadoPor + ")" : ""), text: "Emitido por oficina" }) : null));
       const pick = () => { S.selected = r.id; renderPanel(); };
       tr.addEventListener("click", pick); tr.addEventListener("keydown", (e) => { if (e.key === "Enter" && e.target === tr) pick(); });
       body.append(tr);
@@ -604,9 +619,60 @@ details.day .scroll { padding: 6px 10px 10px; }
     } else if (can.oficina) {
       botones = [el("button", { text: "Corregir recibo", title: "Cambiar la cantidad de billetes y monedas, o los montos de ACH, Yappy y cheque que escribió el chofer", onclick: () => { EDIT = { id: r.id, conteo: { ...(r.conteo || {}) }, ach: r.ach || 0, yappy: r.yappy || 0, cheque: r.cheque || 0 }; renderDetail(); } }), del];
     }
-    box.replaceChildren(...[el("h2", { text: r.chofer }), meta, editando ? el("div", { class: "notice warn", text: "Escribe la cantidad correcta de piezas y los montos de ACH, Yappy y cheque en dólares. Los totales se calculan solos. La versión del chofer queda guardada en Historial y el chofer ya no podrá cambiar este recibo." }) : null, el("div", { class: "scroll" }, t), ...extra, can.oficina ? el("div", { class: "btns" }, ...botones) : null].filter(Boolean));
+    box.replaceChildren(...[el("h2", { text: nomR(r) }), meta, editando ? el("div", { class: "notice warn", text: "Escribe la cantidad correcta de piezas y los montos de ACH, Yappy y cheque en dólares. Los totales se calculan solos. La versión del chofer queda guardada en Historial y el chofer ya no podrá cambiar este recibo." }) : null, el("div", { class: "scroll" }, t), ...extra, can.oficina ? el("div", { class: "btns" }, ...botones) : null].filter(Boolean));
   }
   let EDIT = null; // recibo cuyas cantidades está corrigiendo la oficina
+
+  /* ---------- la oficina emite un recibo a nombre de un chofer ---------- */
+  // Queda como recibo ADICIONAL de ese chofer y fecha (no reemplaza el suyo). Ejemplo: el chofer termina hoy
+  // una ruta que no entregó completa ayer; ese dinero entra en la caja de hoy con la venta del día que corresponde.
+  function abrirEmitir() {
+    const box = $("emitir"), E = { conteo: Object.fromEntries(DENOMS.map((d) => [d.k, 0])), ach: 0, yappy: 0, cheque: 0 };
+    const inp = (attrs) => el("input", { ...attrs, style: "color:var(--ink-blue,#0a4d8f);font-weight:600;" + (attrs.style || "") });
+    const fecha = el("input", { type: "date", value: S.pFecha, max: today() }), venta = el("input", { type: "date", value: prevDay(S.pFecha) });
+    fecha.addEventListener("change", () => { if (fecha.value) venta.value = prevDay(fecha.value); });
+    const chofer = el("select", {}, el("option", { value: "", text: "Escoge el chofer…" }),
+      ...[...DB.choferes].sort((a, b) => (a.activo === false) - (b.activo === false)).map((c) => el("option", { value: c.id, text: c.nombre + (c.activo === false ? " (inactivo)" : "") })));
+    const ruta = el("input", { type: "text", maxlength: "120", placeholder: "Ruta / camión" });
+    chofer.addEventListener("change", () => { const c = DB.choferes.find((x) => x.id === chofer.value); if (c) ruta.value = c.ruta || ""; });
+    const efecTd = td(""), otrosTd = td(""), totTd = td("");
+    const recalc = () => { let e = 0; for (const d of DENOMS) e += E.conteo[d.k] * d.cents; const o = E.ach + E.yappy + E.cheque; efecTd.textContent = fmt(e); otrosTd.textContent = fmt(o); totTd.textContent = fmt(e + o); };
+    const filas = DENOMS.map((d) => {
+      const monto = td("—"), i = inp({ type: "number", min: "0", step: "1", inputmode: "numeric", placeholder: "0", "aria-label": "Cantidad de " + d.tipo + " " + d.label, style: "max-width:110px" });
+      i.addEventListener("input", () => { const v = Math.max(0, Math.floor(Number(i.value) || 0)); E.conteo[d.k] = v; monto.textContent = v ? fmt(v * d.cents) : "—"; recalc(); });
+      return el("tr", {}, td(d.tipo + " " + d.label, "l"), el("td", {}, i), monto);
+    });
+    const otros = [["ach", "ACH"], ["yappy", "Yappy"], ["cheque", "Cheque"]].map(([k, label]) => {
+      const i = inp({ type: "number", min: "0", step: "0.01", inputmode: "decimal", placeholder: "0.00", "aria-label": label + " en dólares", style: "max-width:110px" });
+      i.addEventListener("input", () => { E[k] = toCents(i.value); recalc(); });
+      return el("tr", {}, td(label + " ($)", "l"), el("td", {}, i), td(""));
+    });
+    const refs = el("input", { type: "text", maxlength: "500", placeholder: "Referencias o número de cheque" });
+    const notas = el("textarea", { rows: "2", maxlength: "2000", placeholder: "Por ejemplo: resto de la ruta del lunes" });
+    const msg = el("p", { class: "status" });
+    const guardar = el("button", { class: "primary", text: "Guardar recibo", onclick: async () => {
+      if (!fecha.value || !venta.value) { msg.textContent = "Escribe la fecha de entrega y la de venta."; msg.className = "status err"; return; }
+      if (!chofer.value) { msg.textContent = "Escoge el chofer."; msg.className = "status err"; return; }
+      guardar.disabled = true;
+      try {
+        const j = await api("POST", "/api/recibos", { fecha: fecha.value, fechaVenta: venta.value, choferId: chofer.value, ruta: ruta.value, conteo: E.conteo, ach: E.ach, yappy: E.yappy, cheque: E.cheque, refs: refs.value, notas: notas.value });
+        box.hidden = true; box.replaceChildren();
+        pStatus("Recibo emitido: " + j.recibo.chofer + " · entrega " + longDate(j.recibo.fecha) + " · venta del " + longDate(j.recibo.fechaVenta) + " · " + fmt(j.recibo.total) + ".", "ok");
+        await fetchFechas(); setFecha(j.recibo.fecha); S.selected = j.recibo.fecha + "_" + j.recibo.choferId + (j.recibo.adicional ? "~" + j.recibo.adicional : "");
+      } catch (e) { guardar.disabled = false; msg.textContent = "No se guardó: " + e.message; msg.className = "status err"; }
+    } });
+    const cerrar = el("button", { text: "Cancelar", onclick: () => { box.hidden = true; box.replaceChildren(); } });
+    box.replaceChildren(el("h2", { text: "Emitir recibo de chofer" }),
+      el("p", { class: "muted small", text: "Para dinero que entrega un chofer fuera de su recibo normal, por ejemplo una ruta que terminó al día siguiente. Queda como recibo adicional en la fecha de entrega que escojas (no reemplaza el recibo del chofer) y suma en la caja de ese día. La diferencia contra la venta se calcula con todos los recibos del chofer de ese día. Escribe la cantidad de piezas; los montos se calculan solos." }),
+      el("div", { class: "row" }, el("label", { class: "field" }, "Fecha de entrega (caja)", fecha), el("label", { class: "field" }, "Venta del", venta), el("label", { class: "field" }, "Chofer", chofer), el("label", { class: "field" }, "Ruta / camión", ruta)),
+      el("div", { class: "scroll" }, el("table", { class: "ledger" }, el("thead", {}, el("tr", {}, th("Denominación", "l"), th("Cantidad"), th("Monto"))),
+        el("tbody", {}, ...filas, el("tr", {}, td("Efectivo", "l strong"), td(""), efecTd), ...otros),
+        el("tfoot", {}, el("tr", {}, td("ACH / Yappy / Cheque", "l"), td(""), otrosTd), el("tr", {}, td("Total entregado", "l"), td(""), totTd)))),
+      el("div", { class: "row" }, el("label", { class: "field" }, "Referencias", refs), el("label", { class: "field" }, "Observaciones", notas)),
+      el("div", { class: "btns" }, guardar, cerrar), msg);
+    recalc(); box.hidden = false; box.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+  $("btn-emitir").addEventListener("click", abrirEmitir);
 
   /* ---------- Hoja 1 ---------- */
   const titles = () => ["Dinero recibido en Chutra del " + longDate(S.pFecha), "Desglose total (venta del " + longDate(prevDay(S.pFecha)) + ")"];
@@ -626,7 +692,7 @@ details.day .scroll { padding: 6px 10px 10px; }
     if (!R.length) M.replaceChildren(el("tbody", {}, el("tr", {}, el("td", { class: "l" }, el("div", { class: "empty", text: "Sin recibos para esta fecha." })))));
     else {
       const h1 = el("tr", {}, th("", "l stick"), th("Dinero", "stick2")), h2 = el("tr", {}, th("", "l stick"), th("", "stick2"));
-      for (const r of R) { h1.append(el("th", { colspan: "2" }, r.chofer, el("span", { class: "rt", text: r.ruta || "" }))); h2.append(th("Cant."), th("Total")); }
+      for (const r of R) { h1.append(el("th", { colspan: "2" }, nomR(r), el("span", { class: "rt", text: r.ruta || "" }))); h2.append(th("Cant."), th("Total")); }
       for (const g of ["Total rutas", "Total Food Services", "Total recibido"]) { h1.append(th(g, "grp", { colspan: "2" })); h2.append(th("Cant.", "grp"), th("Total", "grp")); }
       const body = el("tbody");
       for (const d of DENOMS) {
@@ -644,14 +710,14 @@ details.day .scroll { padding: 6px 10px 10px; }
       line("Total recibido", (r) => sums(r).efec, "split");
       line("ACH", (r) => r.ach || 0); line("Cheque", (r) => r.cheque || 0); line("Yappy", (r) => r.yappy || 0);
       line("Total", (r) => sums(r).total, "split");
-      line("Venta", (r) => S.ventas[r.choferId] ?? null, "", ventaInput);
-      line("Diferencia", (r) => S.ventas[r.choferId] != null ? sums(r).total - S.ventas[r.choferId] : null, "split");
+      line("Venta", (r) => S.vdSin.get(r).venta, "", ventaInput);
+      line("Diferencia", (r) => S.vdSin.get(r).dif, "split");
       M.replaceChildren(el("thead", {}, h1, h2), body);
     }
     let tb = 0, tm = 0; const dB = el("tbody");
     for (const d of DENOMS) { const n = denomCount(d.k), m = n * d.cents; if (d.tipo === "Billetes") tb += m; else tm += m; dB.append(el("tr", {}, td(d.tipo, "l"), td(d.label), td(n ? n.toLocaleString("en-US") : "—"), td(fmtOr(m)))); }
     $("h1-den").replaceChildren(el("thead", {}, el("tr", {}, th("Tipo", "l"), th("Dinero"), th("Cantidad"), th("Total"))), dB, el("tfoot", {}, el("tr", {}, td("Total efectivo", "l"), td(""), td(""), td(fmt(tb + tm)))));
-    const rB = el("tbody"); for (const r of R) rB.append(el("tr", {}, td(r.ruta || "—", "l"), td(r.chofer, "l"), td(fmt(sums(r).efec))));
+    const rB = el("tbody"); for (const r of R) rB.append(el("tr", {}, td(r.ruta || "—", "l"), td(nomR(r), "l"), td(fmt(sums(r).efec))));
     $("h1-rutas").replaceChildren(el("thead", {}, el("tr", {}, th("Ruta", "l"), th("Conductor", "l"), th("Depósito"))), rB, el("tfoot", {}, el("tr", {}, td("Total", "l"), td(""), td(fmt(sumBy((r) => sums(r).efec))))));
     const T = totals();
     const kv = (a, b, strong) => [el("span", { class: strong ? "strong" : "", text: a }), typeof b === "string" ? el("span", { class: strong ? "strong" : "", text: b }) : el("span", {}, b)];
@@ -706,7 +772,7 @@ details.day .scroll { padding: 6px 10px 10px; }
     const [t1, t2] = titles(); $("h2-t1").textContent = t1; $("h2-t2").textContent = t2;
     const R = S.recibos, T = totals();
     const body = el("tbody");
-    R.forEach((r, i) => { const s = sums(r); body.append(el("tr", {}, td(i + 1, "l"), td(r.ruta || "—", "l"), td(r.chofer, "l"), td(fmt(s.efec)), td(fmtOr(r.ach)), td(fmtOr(r.yappy)), td(fmtOr(r.cheque)), td(fmt(s.total)))); });
+    R.forEach((r, i) => { const s = sums(r); body.append(el("tr", {}, td(i + 1, "l"), td(r.ruta || "—", "l"), td(nomR(r), "l"), td(fmt(s.efec)), td(fmtOr(r.ach)), td(fmtOr(r.yappy)), td(fmtOr(r.cheque)), td(fmt(s.total)))); });
     if (!R.length) body.append(el("tr", {}, el("td", { colspan: "8", class: "l" }, el("div", { class: "empty", text: "Sin recibos para esta fecha." }))));
     const main = el("div", { class: "panel" }, el("h2", { text: "Entregas por ruta" }), el("div", { class: "scroll" }, el("table", { class: "ledger" },
       el("thead", {}, el("tr", {}, th("#", "l"), th("Ruta", "l"), th("Conductor", "l"), th("Efectivo"), th("ACH"), th("Yappy"), th("Cheque"), th("Total"))), body,
@@ -757,7 +823,7 @@ details.day .scroll { padding: 6px 10px 10px; }
     const [t1, t2] = titles().map((t) => t.toUpperCase());
     const m = (c) => Math.round(c) / 100;
     const A = [[t1], [t2], ["", "Dinero"], ["", ""]];
-    for (const r of R) { A[2].push(r.chofer, ""); A[3].push(r.ruta || "", "Total"); }
+    for (const r of R) { A[2].push(nomR(r), ""); A[3].push(r.ruta || "", "Total"); }
     A[2].push("Total rutas", "", "Total Food Services", "", "Total recibido", ""); A[3].push("Cantidad", "Total $", "Cantidad", "Total $", "Cantidad", "Total $");
     for (const d of DENOMS) {
       const row = [d.tipo, d.cents / 100];
@@ -767,8 +833,8 @@ details.day .scroll { padding: 6px 10px 10px; }
     }
     const line = (label, fn) => { const row = [label, ""]; for (const r of R) { const v = fn(r); row.push("", v == null ? "" : m(v)); } for (const set of [rutas, fs, R]) { const vals = set.map(fn).filter((v) => v != null); row.push("", vals.length ? m(vals.reduce((a, b) => a + b, 0)) : ""); } A.push(row); };
     line("Total Recibido", (r) => sums(r).efec); line("ACH", (r) => r.ach || 0); line("Cheque", (r) => r.cheque || 0); line("YAPPY", (r) => r.yappy || 0);
-    line("Total", (r) => sums(r).total); line("Venta", (r) => S.ventas[r.choferId] ?? null);
-    line("Diferencia", (r) => S.ventas[r.choferId] != null ? sums(r).total - S.ventas[r.choferId] : null);
+    line("Total", (r) => sums(r).total); line("Venta", (r) => S.vdSin.get(r).venta);
+    line("Diferencia", (r) => S.vdSin.get(r).dif);
     A.push([], ["Tipo", "Dinero", "Cantidad", "Total", "", "Ruta", "Conductor", "Depósito", "", "Depósito al banco", ""]);
     const bancoRows = [["Yappy", m(T.yap)], ["Efectivo", m(T.efec)], ["ACH", m(T.ach)], ["Cheque", m(T.chq)], ["Total Depósito Banco", m(T.yap + T.efec + T.ach + T.chq)], ["", ""], ["Total de Facturación", m(T.venta)], ["Dif Depósito vs Venta (Faltante)", m(T.faltante)], ["Dif Depósito vs Venta (Sobrante)", m(T.sobrante)]];
     const n = Math.max(DENOMS.length + 1, R.length + 1, bancoRows.length);
@@ -776,7 +842,7 @@ details.day .scroll { padding: 6px 10px 10px; }
       const row = [];
       if (i < DENOMS.length) { const d = DENOMS[i], q = denomCount(d.k); row.push(d.tipo, d.cents / 100, q, m(q * d.cents)); } else if (i === DENOMS.length) row.push("", "Total Efectivo", "", m(T.efec)); else row.push("", "", "", "");
       row.push("");
-      if (i < R.length) row.push(R[i].ruta || "", R[i].chofer, m(sums(R[i]).efec)); else if (i === R.length) row.push("", "Total", m(T.efec)); else row.push("", "", "");
+      if (i < R.length) row.push(R[i].ruta || "", nomR(R[i]), m(sums(R[i]).efec)); else if (i === R.length) row.push("", "Total", m(T.efec)); else row.push("", "", "");
       row.push("");
       if (i < bancoRows.length) row.push(...bancoRows[i]);
       A.push(row);
@@ -785,7 +851,7 @@ details.day .scroll { padding: 6px 10px 10px; }
     ws1["!merges"] = [...R.map((_, i) => ({ s: { r: 2, c: 2 + i * 2 }, e: { r: 2, c: 3 + i * 2 } })), ...[0, 1, 2].map((j) => ({ s: { r: 2, c: 2 + R.length * 2 + j * 2 }, e: { r: 2, c: 3 + R.length * 2 + j * 2 } }))];
     ws1["!cols"] = [{ wch: 16 }, { wch: 13 }, ...Array(R.length * 2 + 6).fill({ wch: 12 })];
     const B = [[t1], [t2], ["#", "RUTA", "CONDUCTOR", "EFECTIVO", "ACH", "YAPPY", "CHEQUE", "TOTAL"]];
-    R.forEach((r, i) => { const s = sums(r); B.push([i + 1, r.ruta || "", r.chofer, m(s.efec), m(r.ach || 0), m(r.yappy || 0), m(r.cheque || 0), m(s.total)]); });
+    R.forEach((r, i) => { const s = sums(r); B.push([i + 1, r.ruta || "", nomR(r), m(s.efec), m(r.ach || 0), m(r.yappy || 0), m(r.cheque || 0), m(s.total)]); });
     B.push(["", "", "TOTALES", m(T.efec), m(T.ach), m(T.yap), m(T.chq), m(T.total)]);
     B.push(["TOTAL DE FACTURACIÓN", "", "", "", "", "", "", m(T.venta)], ["TOTAL DE FACTURACIÓN SIN FALTANTE", "", "", "", "", "", "", m(T.total - T.venta)], []);
     B.push(["RESUMEN DEPÓSITOS AL BANCO"], ["DEPÓSITO EFECTIVO RECIBIDO DTT (CHUTRA)", "", "", m(T.efec)], ["DEPÓSITO ACH", "", "", m(T.ach)], ["DEPÓSITO EN CHEQUE", "", "", m(T.chq)], ["YAPPY", "", "", m(T.yap)], ["VENTA DE MERMA", "", "", m(T.merma)], ["TOTAL DEPÓSITO", "", "", m(T.efec + T.ach + T.chq + T.yap + T.merma)], []);
@@ -1086,26 +1152,28 @@ details.day .scroll { padding: 6px 10px 10px; }
     const activos = DB.choferes.filter((c) => c.activo !== false).length;
     const dias = fechasConDatos().filter((f) => f >= P.desde && f <= P.hasta).map((f) => {
       const d = DB.dias[f] || { recibos: {}, ventas: {} }, rs = Object.values(d.recibos || {}), ventas = d.ventas || {};
-      const o = { fecha: f, n: rs.length, activos, efec: 0, ach: 0, yap: 0, chq: 0, bill: 0, mon: 0, venta: 0, falt: 0, sobr: 0, ver: 0 };
+      const vd = ventaDif(rs, ventas, false);
+      const o = { fecha: f, n: new Set(rs.map((r) => r.choferId)).size, nr: rs.length, activos, efec: 0, ach: 0, yap: 0, chq: 0, bill: 0, mon: 0, venta: 0, falt: 0, sobr: 0, ver: 0 };
       for (const r of rs) {
         const s = sums(r); o.efec += s.efec; o.bill += s.bill; o.mon += s.mon; o.ach += r.ach || 0; o.yap += r.yappy || 0; o.chq += r.cheque || 0; if (r.verificado) o.ver++;
-        const v = ventas[r.choferId]; if (v != null) { const df = s.total - v; if (df < 0) o.falt += df; else o.sobr += df; }
+        const df = vd.get(r).dif; if (df != null) { if (df < 0) o.falt += df; else o.sobr += df; }
       }
       for (const v of Object.values(ventas)) o.venta += v;
       o.total = o.efec + o.ach + o.yap + o.chq;
       return o;
     });
     const sum = (k) => dias.reduce((a, d) => a + d[k], 0);
-    const tot = { dias: dias.length, recibos: sum("n"), esperados: dias.length * activos, efec: sum("efec"), ach: sum("ach"), yap: sum("yap"), chq: sum("chq"), bill: sum("bill"), mon: sum("mon"), total: sum("total"), venta: sum("venta"), falt: sum("falt"), sobr: sum("sobr"), ver: sum("ver") };
+    const tot = { dias: dias.length, recibos: sum("n"), nr: sum("nr"), esperados: dias.length * activos, efec: sum("efec"), ach: sum("ach"), yap: sum("yap"), chq: sum("chq"), bill: sum("bill"), mon: sum("mon"), total: sum("total"), venta: sum("venta"), falt: sum("falt"), sobr: sum("sobr"), ver: sum("ver") };
     tot.neto = tot.falt + tot.sobr;
     const map = {};
     for (const d of dias) {
       const day = DB.dias[d.fecha] || { recibos: {}, ventas: {} };
+      const vd = ventaDif(Object.values(day.recibos), day.ventas || {}, false);
       for (const r of Object.values(day.recibos)) {
         const m = map[r.choferId] = map[r.choferId] || { id: r.choferId, nombre: r.chofer, tipo: r.tipo, total: 0, venta: 0, dif: 0, conV: 0, dias: 0, falt: 0, diasFalt: 0 };
-        const s = sums(r); m.total += s.total; m.dias++;
-        const v = (day.ventas || {})[r.choferId];
-        if (v != null) { m.venta += v; m.conV++; const df = s.total - v; m.dif += df; if (df < 0) { m.falt += df; m.diasFalt++; } }
+        const s = sums(r), x = vd.get(r); m.total += s.total; if (!x.adic) m.dias++;
+        const v = x.venta;
+        if (v != null) { m.venta += v; m.conV++; const df = x.dif; m.dif += df; if (df < 0) { m.falt += df; m.diasFalt++; } }
       }
     }
     const choferes = Object.values(map).sort((a, b) => b.total - a.total);
@@ -1193,18 +1261,18 @@ details.day .scroll { padding: 6px 10px 10px; }
       diff: { title: "Faltantes y sobrantes por chofer", svg: divergingChart(conDif.sort((a, b) => a.dif - b.dif).map((c) => ({ label: c.nombre, value: c.dif }))), legend: legend([["lg-bad", "Faltante"], ["lg-good", "Sobrante"]]),
         auto: conDif.length ? `Faltante acumulado: ${fmt(t.falt)}; sobrante: ${fmt(t.sobr)}; diferencia neta: ${fmt(t.neto)}.` + (worst && worst.dif < 0 ? ` El mayor faltante es de ${worst.nombre} (${fmt(worst.dif)} en ${worst.diasFalt} día(s)).` : "") : "Aún no hay ventas registradas en el período para comparar." },
       comp: { title: "Cumplimiento de entrega de recibos", svg: complianceChart(D.dias), legend: legend([["lg-good", "100%"], ["lg-warn", "80–99%"], ["lg-bad", "Menos de 80%"]]),
-        auto: t.dias ? `Se recibieron ${t.recibos} de ${t.esperados} recibos esperados (${pct(t.recibos, t.esperados)}%). Verificados por administración: ${t.ver} (${pct(t.ver, t.recibos)}%).` : "" },
+        auto: t.dias ? `Se recibieron ${t.recibos} de ${t.esperados} recibos esperados (${pct(t.recibos, t.esperados)}%). Verificados por administración: ${t.ver} de ${t.nr} recibos (${pct(t.ver, t.nr)}%).` : "" },
     };
   }
   function kpiList(D) {
     const t = D.tot;
     return [
-      { k: "Total entregado", v: fmt(t.total), s: t.dias + " día(s) · " + t.recibos + " recibos" },
+      { k: "Total entregado", v: fmt(t.total), s: t.dias + " día(s) · " + t.nr + " recibos" },
       { k: "Facturación", v: fmt(t.venta), s: t.venta ? "Entregado / venta: " + pct(t.total, t.venta) + "%" : "Sin ventas registradas" },
       { k: "Diferencia neta", v: fmt(t.neto), s: "Faltante " + fmt(t.falt) + " · Sobrante " + fmt(t.sobr), cls: t.neto < 0 ? "bad" : "good" },
       { k: "Efectivo", v: fmt(t.efec), s: pct(t.efec, t.total) + "% del total" },
       { k: "Cumplimiento", v: pct(t.recibos, t.esperados) + "%", s: t.recibos + " de " + t.esperados + " recibos esperados", cls: pct(t.recibos, t.esperados) >= 95 ? "good" : "bad" },
-      { k: "Verificados", v: pct(t.ver, t.recibos) + "%", s: t.ver + " de " + t.recibos + " recibos" },
+      { k: "Verificados", v: pct(t.ver, t.nr) + "%", s: t.ver + " de " + t.nr + " recibos" },
     ];
   }
 
@@ -1223,11 +1291,12 @@ details.day .scroll { padding: 6px 10px 10px; }
   const difH = (v) => v == null ? "—" : `<span class="${v < 0 ? "neg" : v > 0 ? "pos" : ""}">${fmt(v)}</span>`;
   function dailyHtml(D, cls) {
     return [...D.dias].reverse().map((d) => {
-      const day = DB.dias[d.fecha] || { recibos: {}, ventas: {} }, rs = Object.values(day.recibos || {}).sort((a, b) => (a.chofer || "").localeCompare(b.chofer || ""));
-      const rows = rs.map((r) => { const s = sums(r), v = (day.ventas || {})[r.choferId]; return `<tr><td>${esc(r.chofer)}</td><td>${esc(r.ruta || "—")}</td><td>${fmt(s.efec)}</td><td>${r.ach ? fmt(r.ach) : "—"}</td><td>${r.yappy ? fmt(r.yappy) : "—"}</td><td>${r.cheque ? fmt(r.cheque) : "—"}</td><td><b>${fmt(s.total)}</b></td><td>${v != null ? fmt(v) : "—"}</td><td>${difH(v != null ? s.total - v : null)}</td><td>${r.verificado ? "Sí" : "No"}</td></tr>`; }).join("");
+      const day = DB.dias[d.fecha] || { recibos: {}, ventas: {} }, rs = Object.values(day.recibos || {}).sort((a, b) => (a.chofer || "").localeCompare(b.chofer || "") || (a.adicional || 0) - (b.adicional || 0));
+      const vd = ventaDif(rs, day.ventas || {}, false);
+      const rows = rs.map((r) => { const s = sums(r), x = vd.get(r), v = x.venta; return `<tr><td>${esc(nomR(r))}</td><td>${esc(r.ruta || "—")}</td><td>${fmt(s.efec)}</td><td>${r.ach ? fmt(r.ach) : "—"}</td><td>${r.yappy ? fmt(r.yappy) : "—"}</td><td>${r.cheque ? fmt(r.cheque) : "—"}</td><td><b>${fmt(s.total)}</b></td><td>${v != null ? fmt(v) : x.adic ? "Adicional" : "—"}</td><td>${difH(x.dif)}</td><td>${r.verificado ? "Sí" : "No"}</td></tr>`; }).join("");
       return `<details${cls ? ` class="${cls}"` : ""}><summary><span class="d">${esc(longDate(d.fecha))}</span><span>${d.n} de ${d.activos} recibos</span><span>Entregado <b>${fmt(d.total)}</b></span><span>Venta ${fmt(d.venta)}</span><span>Dif. ${difH(d.venta ? d.falt + d.sobr : null)}</span></summary>
 <div class="scroll"><table class="ledger"><thead><tr><th class="l">Chofer</th><th class="l">Ruta</th><th>Efectivo</th><th>ACH</th><th>Yappy</th><th>Cheque</th><th>Total</th><th>Venta</th><th>Diferencia</th><th>Verificado</th></tr></thead><tbody>${rows}</tbody>
-<tfoot><tr><td>Total del día</td><td></td><td>${fmt(d.efec)}</td><td>${fmt(d.ach)}</td><td>${fmt(d.yap)}</td><td>${fmt(d.chq)}</td><td><b>${fmt(d.total)}</b></td><td>${fmt(d.venta)}</td><td>${difH(d.venta ? d.falt + d.sobr : null)}</td><td>${d.ver}/${d.n}</td></tr></tfoot></table></div></details>`;
+<tfoot><tr><td>Total del día</td><td></td><td>${fmt(d.efec)}</td><td>${fmt(d.ach)}</td><td>${fmt(d.yap)}</td><td>${fmt(d.chq)}</td><td><b>${fmt(d.total)}</b></td><td>${fmt(d.venta)}</td><td>${difH(d.venta ? d.falt + d.sobr : null)}</td><td>${d.ver}/${d.nr}</td></tr></tfoot></table></div></details>`;
     }).join("\n");
   }
   function renderDaily(D) {
@@ -1371,7 +1440,7 @@ svg.chart .s-line { fill: none; stroke: var(--ch-line); stroke-width: 2.5; strok
     const conclus = [
       t.neto < 0 ? `Diferencia neta negativa de ${fmt(t.neto)}: revisar con los choferes con faltante.` : `No hay faltante neto en el período (${fmt(t.neto)}).`,
       `Cumplimiento de entrega de recibos: ${pct(t.recibos, t.esperados)}%.`,
-      `Verificación administrativa: ${pct(t.ver, t.recibos)}% de los recibos.`,
+      `Verificación administrativa: ${pct(t.ver, t.nr)}% de los recibos.`,
       "Próximos pasos: (escribe aquí las acciones acordadas)",
     ].join("\n");
     return [
@@ -1472,7 +1541,7 @@ document.addEventListener('keydown',function(e){if(['ArrowRight','PageDown',' ',
     $("me").textContent = (ME.nombre || ME.usuario) + " · " + ({ gerente: "Gerente", asistente: "Asistente", consulta: "Consulta" }[ME.rol] || ME.rol);
     document.querySelectorAll("#tabs a").forEach((a) => { a.hidden = !allowedViews().includes(a.dataset.view); });
     $("import-panel").hidden = !can.gerente;
-    $("btn-excel").hidden = !can.oficina; $("btn-sap").hidden = !can.oficina;
+    $("btn-excel").hidden = !can.oficina; $("btn-sap").hidden = !can.oficina; $("btn-emitir").hidden = !can.oficina;
     $("deck-title").readOnly = !can.oficina;
     try { await Promise.all([fetchChoferes(), fetchFechas(), loadPresentacion()]); } catch (e) { pStatus(e.message, "err"); }
     draft = DB.choferes.map((c) => ({ ...c }));

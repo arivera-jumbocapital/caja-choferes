@@ -153,6 +153,11 @@ ALTER TABLE recibos ADD COLUMN IF NOT EXISTS ajustado_por int NULL REFERENCES us
 ALTER TABLE recibos ADD COLUMN IF NOT EXISTS ajustado_el timestamptz NULL;
 -- Clientes a crédito que anota el chofer: [{cliente, factura, monto}] en centavos. Solo informativo: NO suma al total.
 ALTER TABLE recibos ADD COLUMN IF NOT EXISTS credito jsonb NOT NULL DEFAULT '[]'::jsonb;
+-- Recibos adicionales emitidos por la oficina (0 = recibo normal del chofer; 1, 2… = adicionales del mismo chofer y fecha,
+-- por ejemplo cuando el chofer termina al día siguiente una ruta que no entregó completa).
+ALTER TABLE recibos ADD COLUMN IF NOT EXISTS adicional int NOT NULL DEFAULT 0;
+ALTER TABLE recibos DROP CONSTRAINT IF EXISTS recibos_fecha_chofer_id_key;
+CREATE UNIQUE INDEX IF NOT EXISTS recibos_fecha_chofer_adicional_uq ON recibos (fecha, chofer_id, adicional);
 CREATE INDEX IF NOT EXISTS recibos_fecha_idx ON recibos (fecha);
 CREATE INDEX IF NOT EXISTS versiones_creado_idx ON recibo_versiones (creado DESC);
 CREATE INDEX IF NOT EXISTS auditoria_accion_idx ON auditoria (accion, cuando DESC);

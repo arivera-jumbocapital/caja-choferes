@@ -25,12 +25,13 @@ async function unRecibo(c, obj, nombreArchivo, uid, extra = {}) {
   const choferId = slug(obj.choferId) === String(obj.choferId) ? String(obj.choferId) : slug(obj.choferId);
   const d = R.limpiar(obj);
   d.fecha = obj.fecha; d.fechaVenta = fechaValida(obj.fechaVenta) ? obj.fechaVenta : fechaVentaDe(obj.fecha); d.choferId = choferId;
+  d.adicional = Math.max(0, Math.floor(Number(obj.adicional) || 0));
   const control = obj.control ? checksum({ fecha: obj.fecha, choferId: String(obj.choferId), total: d.total, efectivo: d.efectivo, ach: d.ach, yappy: d.yappy, cheque: d.cheque, conteo: d.conteo }) : null;
   const alterado = !!obj.alterado || (obj.control != null && (control !== obj.control || d.total !== obj.total));
   const guardado = obj.guardado && !isNaN(new Date(obj.guardado)) ? new Date(obj.guardado).toISOString() : new Date().toISOString();
   const { known, chofer } = await asegurarChofer(c, choferId, obj.chofer, obj.tipo, obj.ruta);
   const nombre = chofer.nombre;
-  const prev = await R.porFechaChofer(c, d.fecha, choferId, true);
+  const prev = await R.porFechaChofer(c, d.fecha, choferId, true, d.adicional);
   const comoVersion = (motivo) => R.guardarVersion(c, { ...obj, chofer: nombre, choferId, ...d, guardado, alterado }, motivo, uid);
   if (prev) {
     const same = prev.total_c === d.total && new Date(prev.guardado).toISOString() === guardado && KEYS.every((k) => (prev.conteo[k] || 0) === d.conteo[k]);
