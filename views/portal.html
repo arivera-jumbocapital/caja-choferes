@@ -182,7 +182,6 @@ details.day .scroll { padding: 6px 10px 10px; }
       <label class="field">Venta del<input type="text" id="p-fventa" readonly></label>
     </div>
     <div class="btns"><button id="btn-sap" title="Vuelve a leer la facturación de SAP y actualiza la venta de los choferes">Actualizar SAP</button><button class="primary" id="btn-excel">Descargar reporte Excel</button></div>
-    <div class="chips" id="date-chips" style="flex-basis:100%"></div>
   </div>
   <div class="bar" id="periodbar" hidden>
     <div class="row" style="min-width:min(100%,420px)">
@@ -491,7 +490,7 @@ details.day .scroll { padding: 6px 10px 10px; }
   document.addEventListener("focusout", () => setTimeout(() => { for (const id of [...held]) renderSection(id); }, 0));
   function renderSection(id) { ({ "view-panel": () => guarded(id, renderPanel), "view-hoja1": () => guarded(id, renderHoja1), "view-hoja2": () => guarded(id, renderHoja2) })[id]?.(); }
   function renderAll() {
-    renderSection("view-panel"); renderSection("view-hoja1"); renderSection("view-hoja2"); renderBackup(); renderChips();
+    renderSection("view-panel"); renderSection("view-hoja1"); renderSection("view-hoja2"); renderBackup();
     if (!$("view-graficas").hidden) renderExec();
     if (!$("view-presentacion").hidden && !$("deck").contains(document.activeElement)) renderDeck();
   }
@@ -1080,10 +1079,6 @@ details.day .scroll { padding: 6px 10px 10px; }
           catch (e) { pStatus("No se pudo restaurar: " + e.message, "err"); }
         } })))) : [el("tr", {}, el("td", { colspan: "5", class: "l muted", text: "No hay versiones guardadas aparte." }))])));
   }
-  function renderChips() {
-    const fechas = Object.keys(DB.fechas).sort().reverse();
-    $("date-chips").replaceChildren(...(fechas.length ? [el("span", { class: "muted small", text: "Fechas con recibos:" }), ...fechas.slice(0, 14).map((f) => el("button", { class: "sm" + (f === S.pFecha ? " primary" : ""), text: ddmm(f) + " (" + DB.fechas[f].n + ")", onclick: () => setFecha(f) }))] : []));
-  }
 
   /* ---------- respaldo ---------- */
   function renderBackup() {
@@ -1553,7 +1548,7 @@ document.addEventListener('keydown',function(e){if(['ArrowRight','PageDown',' ',
     const tick = () => {
       if (document.hidden || !can.oficina || !$("stage").hidden) return;
       const h = today();
-      if (h !== hoyVisto) { const seguir = S.pFecha === hoyVisto; hoyVisto = h; if (seguir) { setFecha(h); fetchFechas().then(renderChips).catch(() => {}); return; } }
+      if (h !== hoyVisto) { const seguir = S.pFecha === hoyVisto; hoyVisto = h; if (seguir) { setFecha(h); fetchFechas().catch(() => {}); return; } }
       const a = document.activeElement; if (a && a.matches("input, textarea, [contenteditable]")) return;
       refresh().catch(() => {});
     };
