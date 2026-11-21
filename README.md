@@ -75,7 +75,7 @@ Luego abre http://localhost:3000.
 
 ## Facturación SAP (automática)
 
-Al abrir un día en el **Panel**, el portal lee SAP (facturas y notas de crédito, sin servicios ni anulados) y llena la **Venta** de cada chofer con el **neto** de su camión: facturado (almacén 09) − merma (10) − devolución (16). La tarjeta **Facturación** muestra el total y de qué día salió.
+Al abrir un día en el **Panel**, el portal lee SAP (facturas y notas de crédito **solo del canal DT** —clientes cuyo código empieza con DT—, sin servicios ni anulados; los canales UT, FS, MQ, EM y CN no entran) y llena la **Venta** de cada chofer con el **neto** de su camión: facturado (almacén 09) − merma (10) − devolución (16). La tarjeta **Facturación** muestra el total y de qué día salió.
 
 - **Día de venta:** el día anterior a la entrega; la entrega del **lunes** toma el **sábado**.
 - Cada camión de SAP (`U_CodVehiculo`, p. ej. `CAM-90`, `PE-PTL-02`) se relaciona con un chofer por el campo **Camión SAP** de la *Lista de choferes*, la ruta de su recibo del día o su ruta en la lista. Si no queda claro (dos choferes con el mismo camión), la tarjeta avisa "Sin chofer: …".
