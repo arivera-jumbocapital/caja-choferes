@@ -82,6 +82,7 @@ Al abrir un día en el **Panel**, el portal lee SAP (facturas y notas de crédit
 - Una venta **escrita a mano no se reemplaza**. Si se borra, vuelve la de SAP.
 - SAP se lee como máximo cada 15 minutos por día; pasados 2 días la cifra queda fija. El botón **Actualizar SAP** (junto a Descargar reporte Excel) lo vuelve a leer en el momento (mínimo 1 minuto entre lecturas).
 - **Tabla "Facturación SAP" en el Panel:** muestra cada camión con su chofer, documentos, facturado, merma, devolución y neto del día de venta, aunque el chofer no haya entregado recibo. Los camiones sin chofer (o con **empate**, cuando el mismo camión SAP está en dos choferes activos) salen aparte y **no suman** en la Facturación.
+- **Reporte inicial de liquidación (PDF):** debajo de la tabla Facturación SAP del Panel. Arma un PDF con el logo, "Jumbo Capital, S.A. · Reporte Inicial de Liquidación", el mes y "Ventas DTT", las fechas de venta, factura, despacho y cobro (se proponen solas y se pueden cambiar) y la venta inicial por camión de SAP (facturado, merma, devolución y neto). Usa jsPDF 2.5.1 y jspdf-autotable 3.8.2 de cdnjs, que se cargan solo al pulsar el botón.
 - **Camión compartido:** si dos o más choferes activos tienen el mismo "Camión SAP", cada uno entrega su recibo. La venta del camión se guarda una sola vez (en el primero de la lista) y en el Panel la diferencia se calcula contra la suma de los recibos de todos los que comparten el camión. Los demás aparecen con la etiqueta "Camión compartido".
 
 ## Reglas que respeta el servidor

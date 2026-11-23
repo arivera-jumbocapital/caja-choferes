@@ -1007,7 +1007,86 @@ details.day .scroll { padding: 6px 10px 10px; }
     box.replaceChildren(...[titulo,
       el("p", { class: "muted small", text: "Neto = facturado − merma − devolución. Es la venta que se llena sola en cada chofer (salvo que se haya escrito a mano)." + (I.consultado ? " Leído " + when(I.consultado) + "." : "") }),
       el("div", { class: "scroll" }, el("table", { class: "ledger" }, el("thead", {}, el("tr", {}, th("Camión", "l"), th("Chofer", "l"), th("Documentos"), th("Facturado"), th("Merma"), th("Devolución"), th("Neto"))), body, foot)),
-      extra].filter(Boolean));
+      extra, filas.length ? pdfBloque(I) : null].filter(Boolean));
+  }
+
+  /* ---------- PDF: Reporte Inicial de Liquidación (venta inicial DTT de SAP) ---------- */
+  // Las fechas se proponen y se pueden cambiar antes de descargar; se recuerdan mientras no cambie el día del Panel.
+  let PDFF = null;
+  function pdfBloque(I) {
+    const fv = I.fechaVenta || prevDay(S.pFecha);
+    if (!PDFF || PDFF.dia !== S.pFecha) PDFF = { dia: S.pFecha, venta: fv, factura: fv, despacho: fv, cobro: S.pFecha };
+    const campo = (label, k) => { const i = el("input", { type: "date", value: PDFF[k] }); i.addEventListener("change", () => { PDFF[k] = i.value; }); return el("label", { class: "field" }, label, i); };
+    const b = el("button", { class: "primary", text: "Descargar PDF", onclick: () => pdfLiquidacion(I, b) });
+    return el("div", {}, el("h3", { text: "Reporte inicial de liquidación (PDF)" }),
+      el("p", { class: "muted small", text: "Venta inicial DTT según SAP, con el logo y las fechas de abajo. Revisa las fechas antes de descargar." }),
+      el("div", { class: "row" }, campo("Fecha de venta", "venta"), campo("Fecha de factura", "factura"), campo("Fecha de despacho", "despacho"), campo("Fecha de cobro", "cobro")),
+      el("div", { class: "btns", style: "margin-top:10px" }, b));
+  }
+  const cargarScript = (src) => new Promise((ok, mal) => { if (document.querySelector('script[src="' + src + '"]')) return ok(); const s = document.createElement("script"); s.src = src; s.onload = ok; s.onerror = () => mal(new Error("No cargó " + src)); document.head.appendChild(s); });
+  async function pdfLiquidacion(I, btn) {
+    for (const k of ["venta", "factura", "despacho", "cobro"]) if (!PDFF[k]) { pStatus("Escribe todas las fechas del reporte.", "err"); return; }
+    btn.disabled = true; btn.textContent = "Generando PDF…";
+    try {
+      await cargarScript("https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js");
+      await cargarScript("https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js");
+      const { jsPDF } = window.jspdf;
+      const doc = new jsPDF({ unit: "mm", format: "letter" });
+      const W = doc.internal.pageSize.getWidth(), M = 15, AZUL = [10, 77, 143], ROJO = [200, 20, 27], DORADO = [242, 178, 48];
+      const usd = (c) => (c < 0 ? "-$" : "$") + (Math.abs(c) / 100).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      const mes = new Date(PDFF.venta + "T12:00:00").toLocaleDateString("es-PA", { month: "long", year: "numeric" }).replace(/ de /, " ");
+      // Franja de marca (rojo 34 %, dorado 16 %, azul 50 %).
+      doc.setFillColor(...ROJO); doc.rect(0, 0, W * 0.34, 3, "F");
+      doc.setFillColor(...DORADO); doc.rect(W * 0.34, 0, W * 0.16, 3, "F");
+      doc.setFillColor(...AZUL); doc.rect(W * 0.5, 0, W * 0.5, 3, "F");
+      if (LOGO_DATA) doc.addImage(LOGO_DATA, "PNG", M, 9, 34, 34 * 227 / 385);
+      doc.setTextColor(22, 32, 43); doc.setFont("helvetica", "bold"); doc.setFontSize(15);
+      doc.text("Jumbo Capital, S.A.", W - M, 15, { align: "right" });
+      doc.setFontSize(12); doc.text("Reporte Inicial de Liquidación", W - M, 22, { align: "right" });
+      doc.setFont("helvetica", "normal"); doc.setFontSize(11); doc.setTextColor(...AZUL);
+      doc.text(mes.charAt(0).toUpperCase() + mes.slice(1) + " · Ventas DTT", W - M, 28.5, { align: "right" });
+      // Fechas
+      const fechas = [["Fecha de venta", PDFF.venta], ["Fecha de factura", PDFF.factura], ["Fecha de despacho", PDFF.despacho], ["Fecha de cobro", PDFF.cobro]];
+      const y0 = 38, cw = (W - 2 * M) / 4;
+      fechas.forEach(([l, f], i) => {
+        const x = M + i * cw;
+        doc.setDrawColor(220, 225, 232); doc.setFillColor(242, 244, 247); doc.roundedRect(x + 1, y0, cw - 2, 15, 2, 2, "FD");
+        doc.setFont("helvetica", "normal"); doc.setFontSize(7.5); doc.setTextColor(90, 101, 114); doc.text(l.toUpperCase(), x + 3.5, y0 + 5.5);
+        doc.setFont("helvetica", "bold"); doc.setFontSize(9); doc.setTextColor(22, 32, 43); doc.text(longDate(f), x + 3.5, y0 + 11.5);
+      });
+      // Tabla por ruta
+      const nombre = (id) => (DB.choferes.find((c) => c.id === id) || {}).nombre || id;
+      const filas = [...(I.camiones || [])].sort((a, b) => a.camion.localeCompare(b.camion));
+      const tot = (k) => filas.reduce((a, x) => a + (x[k] || 0), 0);
+      doc.autoTable({
+        startY: y0 + 22, margin: { left: M, right: M },
+        head: [["Camión", "Chofer", "Documentos", "Facturado", "Merma", "Devolución", "Neto"]],
+        body: filas.map((x) => [x.camion, (x.comparten || [x.choferId]).map(nombre).join(" / "), String(x.documentos ?? ""), usd(x.facturado || 0), usd(x.merma || 0), usd(x.devolucion || 0), usd(x.neto || 0)]),
+        foot: [["Total rutas", "", String(tot("documentos")), usd(tot("facturado")), usd(tot("merma")), usd(tot("devolucion")), usd(tot("neto"))]],
+        theme: "grid", styles: { font: "helvetica", fontSize: 9, cellPadding: 2.2, lineColor: [220, 225, 232], textColor: [22, 32, 43] },
+        headStyles: { fillColor: AZUL, textColor: 255, fontStyle: "bold", halign: "center" },
+        footStyles: { fillColor: [230, 237, 245], textColor: [22, 32, 43], fontStyle: "bold" },
+        columnStyles: { 0: { cellWidth: 28 }, 2: { halign: "right", cellWidth: 25 }, 3: { halign: "right" }, 4: { halign: "right" }, 5: { halign: "right" }, 6: { halign: "right", fontStyle: "bold" } },
+        didParseCell: (d) => { if (d.section === "foot" && d.column.index >= 2) d.cell.styles.halign = "right"; },
+      });
+      let y = doc.lastAutoTable.finalY + 6;
+      const sinCh = I.sinAsignarFilas || [];
+      if (sinCh.length) {
+        doc.setFont("helvetica", "bold"); doc.setFontSize(9.5); doc.setTextColor(22, 32, 43); doc.text("Camiones sin chofer asignado (no incluidos en el total)", M, y);
+        doc.autoTable({ startY: y + 2, margin: { left: M, right: M }, body: sinCh.map((x) => [x.camion, (x.empate || []).length ? "Empate: " + x.empate.join(" / ") : "Sin chofer", String(x.documentos ?? ""), usd(x.facturado || 0), usd(x.merma || 0), usd(x.devolucion || 0), usd(x.neto || 0)]),
+          theme: "grid", styles: { fontSize: 8.5, cellPadding: 2, textColor: [90, 101, 114], lineColor: [220, 225, 232] }, columnStyles: { 0: { cellWidth: 28 }, 2: { halign: "right", cellWidth: 25 }, 3: { halign: "right" }, 4: { halign: "right" }, 5: { halign: "right" }, 6: { halign: "right" } } });
+        y = doc.lastAutoTable.finalY + 6;
+      }
+      doc.setFont("helvetica", "normal"); doc.setFontSize(8.5); doc.setTextColor(90, 101, 114);
+      doc.text(doc.splitTextToSize("Fuente: SAP Business One, canal DT (clientes con código DT). Neto = facturado - merma - devolución. Venta inicial según la facturación emitida" + (I.consultado ? "; datos leídos el " + new Date(I.consultado).toLocaleString("es-PA", { day: "numeric", month: "long", year: "numeric", hour: "numeric", minute: "2-digit" }) : "") + ".", W - 2 * M), M, y);
+      const gen = "Generado el " + new Date().toLocaleString("es-PA", { day: "numeric", month: "long", year: "numeric", hour: "numeric", minute: "2-digit" }) + (ME ? " por " + (ME.nombre || ME.usuario) : "");
+      const n = doc.getNumberOfPages(), H = doc.internal.pageSize.getHeight();
+      for (let p = 1; p <= n; p++) { doc.setPage(p); doc.setFontSize(8); doc.setTextColor(90, 101, 114); doc.text(gen, M, H - 8); doc.text("Página " + p + " de " + n, W - M, H - 8, { align: "right" }); }
+      const dmyV = PDFF.venta.split("-").reverse().join("-");
+      doc.save("Reporte inicial de liquidacion DTT " + dmyV + ".pdf");
+      pStatus("PDF generado: venta del " + longDate(PDFF.venta) + ".", "ok");
+    } catch (e) { pStatus("No se pudo generar el PDF: " + e.message, "err"); }
+    finally { btn.disabled = false; btn.textContent = "Descargar PDF"; }
   }
   function sapSub(T) {
     const I = SAPINFO;
