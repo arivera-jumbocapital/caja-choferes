@@ -25,8 +25,8 @@
     doc.setFont("helvetica", "normal"); doc.setFontSize(11); doc.setTextColor(...AZUL);
     doc.text(mesDe(F.venta) + " · Ventas DTT", W - M, 28.5, { align: "right" });
     // Fechas
-    const fechas = [["Fecha de venta", F.venta], ["Fecha de factura", F.factura], ["Fecha de despacho", F.despacho], ["Fecha de cobro", F.cobro]];
-    const y0 = 38, cw = (W - 2 * M) / 4;
+    const fechas = [["Fecha de factura", F.factura], ["Fecha de cobro", F.cobro]];
+    const y0 = 38, cw = (W - 2 * M) / fechas.length;
     fechas.forEach(([l, f], i) => {
       const x = M + i * cw;
       doc.setDrawColor(220, 225, 232); doc.setFillColor(242, 244, 247); doc.roundedRect(x + 1, y0, cw - 2, 15, 2, 2, "FD");

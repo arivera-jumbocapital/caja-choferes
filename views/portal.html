@@ -1035,7 +1035,7 @@ details.day .scroll { padding: 6px 10px 10px; }
     const env = el("button", { text: "Enviar por correo ahora", onclick: () => enviarCorreo(env) });
     return el("div", {}, el("h3", { text: "Reporte inicial de liquidación (PDF)" }),
       el("p", { class: "muted small", text: "Venta inicial DTT según SAP, con el logo y las fechas de abajo. Revisa las fechas antes de descargar." }),
-      el("div", { class: "row" }, campo("Fecha de venta", "venta"), campo("Fecha de factura", "factura"), campo("Fecha de despacho", "despacho"), campo("Fecha de cobro", "cobro")),
+      el("div", { class: "row" }, campo("Fecha de factura", "factura"), campo("Fecha de cobro", "cobro")),
       el("div", { class: "btns", style: "margin-top:10px" }, b, env));
   }
   // Envía el mismo PDF (armado en el servidor) a los correos de Usuarios → Reporte por correo.
@@ -1057,7 +1057,7 @@ details.day .scroll { padding: 6px 10px 10px; }
     try {
       await cargarScript("https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js");
       await cargarScript("https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js");
-      await cargarScript("/liquidacion.js");
+      await cargarScript("/liquidacion.js?v=2");
       const { jsPDF } = window.jspdf;
       const doc = new jsPDF({ unit: "mm", format: "letter" });
       window.Liquidacion.dibujarLiquidacion(doc, { camiones: I.camiones, sinAsignarFilas: I.sinAsignarFilas, consultado: I.consultado,
