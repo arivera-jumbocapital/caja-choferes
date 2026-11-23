@@ -231,12 +231,17 @@ async function leerSap(fv, usuarioId, forzar) {
 api.post("/sap/sincronizar", A.requiere(...OFICINA), h(async (req, res) => {
   const fecha = req.body && req.body.fecha;
   if (!fechaValida(fecha)) return bad(res, "Fecha no válida.");
+  res.json(await sincronizarSap(fecha, req.user.id, !!(req.body && req.body.forzar)));
+}));
+// Lee SAP para una fecha de ENTREGA, llena la venta de cada chofer y devuelve la facturación por camión.
+// La usan el Panel y el envío automático del reporte (usuarioId null).
+async function sincronizarSap(fecha, usuarioId, forzar) {
   const fv = fechaVentaDe(fecha);
-  if (!SAP.configurado()) return res.json({ configurado: false, fechaVenta: fv });
-  if (fv > hoyPanama()) return res.json({ configurado: true, fechaVenta: fv, camiones: [], sinAsignar: [] });
+  if (!SAP.configurado()) return { configurado: false, fechaVenta: fv };
+  if (fv > hoyPanama()) return { configurado: true, fechaVenta: fv, camiones: [], sinAsignar: [] };
   let filas;
-  try { filas = await leerSap(fv, req.user.id, !!(req.body && req.body.forzar)); }
-  catch (e) { console.error("SAP:", e.message); return res.json({ configurado: true, fechaVenta: fv, error: "No se pudo leer SAP en este momento." }); }
+  try { filas = await leerSap(fv, usuarioId, forzar); }
+  catch (e) { console.error("SAP:", e.message); return { configurado: true, fechaVenta: fv, error: "No se pudo leer SAP en este momento." }; }
   const [{ rows: recs }, { rows: choferes }] = await Promise.all([
     q("SELECT chofer_id, ruta FROM recibos WHERE fecha = $1", [fecha]),
     q("SELECT id, nombre, ruta, camion_sap FROM choferes WHERE activo ORDER BY orden, nombre"),
@@ -273,10 +278,10 @@ api.post("/sap/sincronizar", A.requiere(...OFICINA), h(async (req, res) => {
     // Si antes la venta de un camión compartido quedó en el otro chofer, se quita (solo la que llenó SAP, nunca una escrita a mano).
     const sueltos = noTitular.filter((id) => !(id in montos));
     if (sueltos.length) cambios += (await c.query("DELETE FROM ventas WHERE fecha = $1 AND origen = 'sap' AND chofer_id = ANY($2)", [fecha, sueltos])).rowCount;
-    if (cambios) await audit(c, req.user.id, "venta_sap", { fecha, fechaVenta: fv, montos });
+    if (cambios) await audit(c, usuarioId, "venta_sap", { fecha, fechaVenta: fv, montos });
   });
-  res.json({ configurado: true, fechaVenta: fv, consultado: filas[0] ? filas[0].consultado : null, camiones, sinAsignar, sinAsignarFilas, cambios });
-}));
+  return { configurado: true, fechaVenta: fv, consultado: filas[0] ? filas[0].consultado : null, camiones, sinAsignar, sinAsignarFilas, cambios };
+}
 
 /* ---------- oficina: verificar, eliminar, versiones ---------- */
 api.post("/recibos/:id/verificar", A.requiere(...OFICINA), h(async (req, res) => {
@@ -494,3 +499,4 @@ api.get("/respaldo", A.requiere(...GERENTE), h(async (req, res) => {
 api.use((req, res) => bad(res, "No encontrado.", 404));
 
 module.exports = api;
+module.exports.sincronizarSap = sincronizarSap;

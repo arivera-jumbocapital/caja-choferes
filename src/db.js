@@ -162,6 +162,26 @@ CREATE INDEX IF NOT EXISTS recibos_fecha_idx ON recibos (fecha);
 CREATE INDEX IF NOT EXISTS versiones_creado_idx ON recibo_versiones (creado DESC);
 CREATE INDEX IF NOT EXISTS auditoria_accion_idx ON auditoria (accion, cuando DESC);
 INSERT INTO presentacion (id) VALUES (1) ON CONFLICT DO NOTHING;
+-- Ajustes generales (por ejemplo, los correos que reciben el reporte de liquidación).
+CREATE TABLE IF NOT EXISTS ajustes (
+  clave text PRIMARY KEY,
+  valor jsonb NOT NULL,
+  actualizado timestamptz NOT NULL DEFAULT now(),
+  actualizado_por int NULL
+);
+-- Envíos por correo del Reporte Inicial de Liquidación (automáticos de las 3:00 a. m. y manuales).
+CREATE TABLE IF NOT EXISTS envios_reporte (
+  id serial PRIMARY KEY,
+  fecha_venta date NOT NULL,
+  tipo text NOT NULL,            -- 'automatico' | 'manual'
+  estado text NOT NULL,          -- 'enviado' | 'error' | 'sin_datos'
+  destinatarios text[] NOT NULL DEFAULT '{}',
+  total_c bigint NULL,
+  detalle text NOT NULL DEFAULT '',
+  enviado_por int NULL,
+  creado timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS envios_reporte_fecha_idx ON envios_reporte (fecha_venta, tipo);
 `;
 
 async function migrate() {

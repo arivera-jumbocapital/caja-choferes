@@ -9,6 +9,7 @@ const PgStore = require("connect-pg-simple")(session);
 const { pool, q, migrate } = require("./src/db");
 const A = require("./src/auth");
 const api = require("./src/api");
+const reporte = require("./src/reporte");
 
 const PROD = process.env.NODE_ENV === "production";
 const PORT = Number(process.env.PORT) || 3000;
@@ -46,6 +47,7 @@ app.use(session({
 }));
 app.use(A.cargarUsuario);
 
+app.use("/api/reporte", reporte.router);
 app.use("/api", api);
 
 // Páginas
@@ -75,4 +77,5 @@ app.use((err, req, res, next) => {
   await migrate();
   await A.crearPrimerGerente();
   app.listen(PORT, () => console.log("Caja de Choferes escuchando en el puerto " + PORT));
+  reporte.iniciar();
 })().catch((e) => { console.error("No se pudo arrancar:", e); process.exit(1); });
