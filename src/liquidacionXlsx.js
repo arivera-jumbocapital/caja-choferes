@@ -9,7 +9,6 @@ const TZ = "America/Panama";
 const NAVY = "FF0A3A6B", GRIS = "FFD9D9D9", CLARO = "FFDCE6F1", OSCURO = "FF595959", AMARILLO = "FFFFFF00", ROJO = "FFFF0000";
 const NUM = "#,##0.00";
 const CONT = '_-* #,##0.00_-;\\-* #,##0.00_-;_-* "-"??_-;_-@_-';
-const MIN_COLS = 16; // el Excel original tiene columnas de la B a la Q
 const MESES = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"];
 
 const letra = (n) => { let s = ""; for (n++; n > 0; n = Math.floor((n - 1) / 26)) s = String.fromCharCode(65 + ((n - 1) % 26)) + s; return s; }; // 0 → A
@@ -38,11 +37,13 @@ async function libroLiquidacion(dias, opts = {}) {
 
 function hoja(wb, D, logo, opts) {
   const ws = wb.addWorksheet(dmy(D.fechaVenta), { views: [{ showGridLines: true }], pageSetup: { orientation: "landscape", fitToPage: true, fitToWidth: 1, fitToHeight: 0, paperSize: 1 } });
-  const n = Math.max(MIN_COLS, D.cols.length);
+  // Solo las columnas con datos (venta en SAP, cambios o recibos).
+  D = { ...D, cols: D.cols.filter((c) => c.inicial || c.final || c.notas || c.facturas || c.credito || c.recibos) };
+  const n = Math.max(1, D.cols.length);
   const ult = letra(n);                     // última columna de camiones
   const C = (i) => letra(i + 1);            // columna del camión i (0 → B)
   ws.getColumn(1).width = 24;
-  for (let i = 0; i < n; i++) ws.getColumn(i + 2).width = i < D.cols.length ? 15 : 11;
+  for (let i = 0; i < n; i++) ws.getColumn(i + 2).width = i === 0 ? 19 : 16; // B también lleva "Fecha de Despacho"
 
   const celda = (ref, valor, st = {}) => {
     const c = ws.getCell(ref);
@@ -57,22 +58,24 @@ function hoja(wb, D, logo, opts) {
   const etiqueta = (fila, texto) => celda("A" + fila, texto, { bold: true, size: 10, color: "FFFFFFFF", fill: NAVY, h: "left", wrap: true });
 
   // Encabezado
-  ws.mergeCells(`A1:${ult}1`); celda("A1", "JUMBO CAPITAL, S.A.", { bold: true, color: "FFFFFFFF", fill: NAVY });
-  ws.mergeCells(`A2:${ult}2`); celda("A2", "ENTREGAS DTT", { bold: true, color: "FFFFFFFF", fill: NAVY });
+  const ultH = letra(Math.max(n, 2)); // el encabezado cubre al menos hasta la columna de las fechas (C)
+  ws.mergeCells(`A1:${ultH}1`); celda("A1", "JUMBO CAPITAL, S.A.", { bold: true, color: "FFFFFFFF", fill: NAVY });
+  ws.mergeCells(`A2:${ultH}2`); celda("A2", "ENTREGAS DTT", { bold: true, color: "FFFFFFFF", fill: NAVY });
   const fechas = [["Fecha de Pedido", D.fechaVenta], ["Fecha de Despacho", D.entrega], ["Fecha de cobro", D.entrega]];
+  // Logo a la izquierda (A3:A5); fechas a su derecha.
+  ws.mergeCells("A3:A5"); celda("A3", "", {});
+  ws.addImage(logo, { tl: { col: 0.25, row: 2.12 }, ext: { width: 104, height: 61 }, editAs: "oneCell" });
+  if (n < 2) ws.getColumn(3).width = 15;
   fechas.forEach(([t, f], k) => {
     const r = 3 + k;
-    ws.mergeCells(`A${r}:B${r}`); celda("A" + r, t, { bold: true, fill: GRIS, h: "left" });
+    celda("B" + r, t, { bold: true, fill: GRIS, h: "left", size: 11 });
     celda("C" + r, fechaDate(f), { bold: true, fmt: "dd/mm/yyyy" });
-    ws.getRow(r).height = 20;
+    ws.getRow(r).height = 22;
   });
-  ws.mergeCells(`D3:${ult}5`); celda("D3", "", { borde: false });
-  ws.addImage(logo, { tl: { col: 3.15, row: 2.08 }, ext: { width: 104, height: 61 }, editAs: "oneCell" });
 
   ws.mergeCells("A6:A7"); celda("A6", "Descripcion", { color: "FFFFFFFF", fill: NAVY });
-  ws.mergeCells(`B6:${ult}6`); celda("B6", "", { fill: CLARO });
-  if (n === MIN_COLS) { ws.mergeCells("B7:G7"); ws.mergeCells("H7:L7"); ws.mergeCells("M7:Q7"); for (const r of ["B7", "H7", "M7"]) celda(r, "", { fill: OSCURO }); }
-  else { ws.mergeCells(`B7:${ult}7`); celda("B7", "", { fill: OSCURO }); }
+  if (n > 1) { ws.mergeCells(`B6:${ult}6`); ws.mergeCells(`B7:${ult}7`); }
+  celda("B6", "", { fill: CLARO }); celda("B7", "", { fill: OSCURO });
 
   // Filas por camión
   const filas = [
@@ -101,7 +104,7 @@ function hoja(wb, D, logo, opts) {
     const dif = fin - col.otros - col.efectivo;
     celda(L + 20, { formula: `${L}15-${L}18-${L}19`, result: usd(dif) }, { fmt: NUM, bold: dif !== 0, color: dif > 0 ? "FFC8141B" : dif < 0 ? "FF1E7B34" : "FF000000" });
   }
-  ws.getRow(9).height = 27;
+  ws.getRow(9).height = D.cols.some((c) => c.chofer.length > 16) ? 42 : 27;
 
   // Totales finales
   const suma = (r) => `SUM(B${r}:${ult}${r})`;
