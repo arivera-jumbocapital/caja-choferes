@@ -30,15 +30,16 @@ function pool() {
 // Devolución = notas al 16 − facturas al 16; Neto = Facturado − Merma − Devolución.
 // Solo canal DT (clientes cuyo código empieza con DT): es el canal de las rutas de los choferes.
 // Los demás canales (UT supermercados, FS, MQ, EM, CN) usan otros camiones y no entran en la caja de choferes.
-function consultaResumen(desde, hasta) {
+function consultaResumen(desde, hasta, porDia) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(desde) || !/^\d{4}-\d{2}-\d{2}$/.test(hasta)) throw new Error("Fecha no válida.");
   const parte = (cab, lin, signo) => `
-  SELECT ${signo} AS "signo", IFNULL(NULLIF(T0."U_CodVehiculo", ''), 'Sin camion') AS "camion", T0."DocTotal" AS "total",
+  SELECT ${signo} AS "signo", TO_VARCHAR(T0."DocDate", 'YYYY-MM-DD') AS "dia", IFNULL(NULLIF(T0."U_CodVehiculo", ''), 'Sin camion') AS "camion", T0."DocTotal" AS "total",
          (SELECT MAX(L."WhsCode") FROM ${ESQUEMA}."${lin}" L WHERE L."DocEntry" = T0."DocEntry") AS "almacen",
          (SELECT COUNT(DISTINCT L."WhsCode") FROM ${ESQUEMA}."${lin}" L WHERE L."DocEntry" = T0."DocEntry") AS "almacenes"
   FROM ${ESQUEMA}."${cab}" T0
   WHERE T0."CANCELED" = 'N' AND T0."DocType" = 'I' AND LEFT(T0."CardCode", 2) = 'DT' AND T0."DocDate" >= '${desde}' AND T0."DocDate" <= '${hasta}'`;
-  return `SELECT D."camion", COUNT(*) AS "documentos",
+  const dia = porDia ? 'D."dia", ' : "";
+  return `SELECT ${dia}D."camion", COUNT(*) AS "documentos",
        SUM(CASE WHEN D."almacen" = '09' THEN  D."signo" * D."total" ELSE 0 END) AS "facturado",
        SUM(CASE WHEN D."almacen" = '10' THEN -D."signo" * D."total" ELSE 0 END) AS "merma",
        SUM(CASE WHEN D."almacen" = '16' THEN -D."signo" * D."total" ELSE 0 END) AS "devolucion",
@@ -47,18 +48,19 @@ function consultaResumen(desde, hasta) {
 FROM (${parte("OINV", "INV1", 1)}
   UNION ALL ${parte("ORIN", "RIN1", -1)}
 ) D
-GROUP BY D."camion"
-ORDER BY D."camion"`;
+GROUP BY ${dia}D."camion"
+ORDER BY ${dia}D."camion"`;
 }
 
 const cents = (v) => Math.round(Number(v || 0) * 100);
 
-async function resumenPorCamion(desde, hasta) {
+async function resumenPorCamion(desde, hasta, porDia) {
   if (!configurado()) { const e = new Error("La conexión con SAP no está configurada (faltan las variables MSSQL_* en Railway)."); e.status = 503; throw e; }
-  const hana = consultaResumen(desde, hasta);
+  const hana = consultaResumen(desde, hasta, porDia);
   const p = await pool();
   const { recordset } = await p.request().query(`SELECT * FROM OPENQUERY([HANA-005], '${hana.replace(/'/g, "''")}')`);
   return recordset.map((r) => ({
+    ...(porDia ? { dia: String(r.dia) } : {}),
     camion: String(r.camion || "Sin camion").trim(),
     documentos: Number(r.documentos || 0),
     facturado: cents(r.facturado), merma: cents(r.merma), devolucion: cents(r.devolucion), neto: cents(r.neto),

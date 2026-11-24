@@ -215,17 +215,70 @@ async function leerSap(fv, usuarioId, forzar) {
   if (forzar ? Date.now() - ultima < 60e3 : (rows.length && cerrado) || Date.now() - ultima < 15 * 60e3) return rows; // caché de 15 minutos
   const filas = await SAP.resumenPorCamion(fv, fv);
   if (!filas.length) sinDatos.set(fv, Date.now());
-  await tx(async (c) => {
-    await c.query("DELETE FROM sap_facturacion WHERE fecha_venta = $1", [fv]);
-    for (const f of filas) {
-      await c.query(`INSERT INTO sap_facturacion (fecha_venta, camion, documentos, facturado_c, merma_c, devolucion_c, neto_c, varios, consultado_por)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT (fecha_venta, camion) DO UPDATE SET documentos = sap_facturacion.documentos + EXCLUDED.documentos,
-        facturado_c = sap_facturacion.facturado_c + EXCLUDED.facturado_c, merma_c = sap_facturacion.merma_c + EXCLUDED.merma_c,
-        devolucion_c = sap_facturacion.devolucion_c + EXCLUDED.devolucion_c, neto_c = sap_facturacion.neto_c + EXCLUDED.neto_c, varios = sap_facturacion.varios + EXCLUDED.varios`,
-      [fv, f.camion, f.documentos, f.facturado, f.merma, f.devolucion, f.neto, f.varios, usuarioId]);
-    }
-  });
+  await tx((c) => guardarSap(c, fv, filas, usuarioId));
   return (await q("SELECT * FROM sap_facturacion WHERE fecha_venta = $1", [fv])).rows;
+}
+// Reemplaza la lectura guardada de un día de venta. La primera lectura hecha después del día de venta
+// (normalmente la de las 3:00 a. m.) queda además fija en sap_inicial: es la liquidación INICIAL.
+async function guardarSap(c, fv, filas, usuarioId) {
+  await c.query("DELETE FROM sap_facturacion WHERE fecha_venta = $1", [fv]);
+  for (const f of filas) {
+    await c.query(`INSERT INTO sap_facturacion (fecha_venta, camion, documentos, facturado_c, merma_c, devolucion_c, neto_c, varios, consultado_por)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT (fecha_venta, camion) DO UPDATE SET documentos = sap_facturacion.documentos + EXCLUDED.documentos,
+      facturado_c = sap_facturacion.facturado_c + EXCLUDED.facturado_c, merma_c = sap_facturacion.merma_c + EXCLUDED.merma_c,
+      devolucion_c = sap_facturacion.devolucion_c + EXCLUDED.devolucion_c, neto_c = sap_facturacion.neto_c + EXCLUDED.neto_c, varios = sap_facturacion.varios + EXCLUDED.varios`,
+    [fv, f.camion, f.documentos, f.facturado, f.merma, f.devolucion, f.neto, f.varios, usuarioId]);
+  }
+  const hoy = hoyPanama();
+  if (filas.length && hoy > fv && hoy <= sumarDias(fv, 2)) {
+    await c.query(`INSERT INTO sap_inicial (fecha_venta, camion, documentos, facturado_c, merma_c, devolucion_c, neto_c, consultado)
+      SELECT fecha_venta, camion, documentos, facturado_c, merma_c, devolucion_c, neto_c, consultado FROM sap_facturacion
+      WHERE fecha_venta = $1 AND NOT EXISTS (SELECT 1 FROM sap_inicial WHERE fecha_venta = $1)`, [fv]);
+  }
+}
+// Pone al día varios días de venta con UNA sola consulta a SAP (para la liquidación del mes).
+// Respeta la misma caché que leerSap: un día leído 2 días después de la venta ya no cambia; si no, se relee cada 15 minutos.
+async function leerSapRango(desde, hasta, usuarioId) {
+  const { rows } = await q("SELECT fecha_venta, MIN(consultado) AS consultado FROM sap_facturacion WHERE fecha_venta BETWEEN $1 AND $2 GROUP BY fecha_venta", [desde, hasta]);
+  const ult = Object.fromEntries(rows.map((r) => [r.fecha_venta, new Date(r.consultado).getTime()]));
+  const pendientes = [];
+  for (let f = desde; f <= hasta; f = sumarDias(f, 1)) {
+    const u = ult[f] || sinDatos.get(f) || 0;
+    const cerrado = ult[f] && u > new Date(f + "T00:00:00-05:00").getTime() + 2 * 864e5;
+    if (!cerrado && Date.now() - u >= 15 * 60e3) pendientes.push(f);
+  }
+  if (!pendientes.length) return;
+  const filas = await SAP.resumenPorCamion(pendientes[0], pendientes[pendientes.length - 1], true);
+  const porDia = {};
+  for (const f of filas) (porDia[f.dia] = porDia[f.dia] || []).push(f);
+  for (const f of pendientes) {
+    if (!porDia[f]) { sinDatos.set(f, Date.now()); if (!ult[f]) continue; }
+    await tx((c) => guardarSap(c, f, porDia[f] || [], usuarioId));
+  }
+}
+// Relaciona cada camión de SAP con su chofer (o choferes, si comparten camión).
+function asignarCamiones(filas, choferes, recibos) {
+  const montos = {}, camiones = [], sinAsignar = [], sinAsignarFilas = [];
+  const det = (f) => ({ camion: f.camion, documentos: Number(f.documentos), facturado: Number(f.facturado_c), merma: Number(f.merma_c), devolucion: Number(f.devolucion_c), neto: Number(f.neto_c) });
+  const noTitular = []; // choferes que comparten camión con otro: la venta del camión va al primero de la lista (el titular)
+  for (const f of filas) {
+    if (f.camion === "Sin camion") continue;
+    // Camión compartido: el mismo "Camión SAP" está en dos o más choferes activos. Ambos entregan recibo; la venta del camión
+    // se guarda en el primero de la lista y en el Panel la diferencia se calcula con los recibos de todos.
+    const mismos = choferes.filter((ch) => ch.camion_sap && normTxt(ch.camion_sap) === normTxt(f.camion));
+    if (mismos.length > 1) {
+      montos[mismos[0].id] = (montos[mismos[0].id] || 0) + Number(f.neto_c);
+      noTitular.push(...mismos.slice(1).map((x) => x.id));
+      camiones.push({ ...det(f), choferId: mismos[0].id, comparten: mismos.map((x) => x.id) });
+      continue;
+    }
+    const empate = [];
+    const id = choferDeCamion(f.camion, choferes, recibos, empate);
+    if (!id) { sinAsignar.push(f.camion); sinAsignarFilas.push({ ...det(f), empate: empate.map((e) => (choferes.find((x) => x.id === e) || {}).nombre || e) }); continue; }
+    montos[id] = (montos[id] || 0) + Number(f.neto_c);
+    camiones.push({ ...det(f), choferId: id });
+  }
+  return { montos, camiones, sinAsignar, sinAsignarFilas, noTitular };
 }
 // Se llama al abrir un día en el Panel: trae SAP y llena la venta de los choferes.
 api.post("/sap/sincronizar", A.requiere(...OFICINA), h(async (req, res) => {
@@ -247,26 +300,7 @@ async function sincronizarSap(fecha, usuarioId, forzar) {
     q("SELECT id, nombre, ruta, camion_sap FROM choferes WHERE activo ORDER BY orden, nombre"),
   ]);
   const recibos = Object.fromEntries(recs.map((r) => [r.chofer_id, r]));
-  const montos = {}, camiones = [], sinAsignar = [], sinAsignarFilas = [];
-  const det = (f) => ({ camion: f.camion, documentos: Number(f.documentos), facturado: Number(f.facturado_c), merma: Number(f.merma_c), devolucion: Number(f.devolucion_c), neto: Number(f.neto_c) });
-  const noTitular = []; // choferes que comparten camión con otro: la venta del camión va al primero de la lista (el titular)
-  for (const f of filas) {
-    if (f.camion === "Sin camion") continue;
-    // Camión compartido: el mismo "Camión SAP" está en dos o más choferes activos. Ambos entregan recibo; la venta del camión
-    // se guarda en el primero de la lista y en el Panel la diferencia se calcula con los recibos de todos.
-    const mismos = choferes.filter((ch) => ch.camion_sap && normTxt(ch.camion_sap) === normTxt(f.camion));
-    if (mismos.length > 1) {
-      montos[mismos[0].id] = (montos[mismos[0].id] || 0) + Number(f.neto_c);
-      noTitular.push(...mismos.slice(1).map((x) => x.id));
-      camiones.push({ ...det(f), choferId: mismos[0].id, comparten: mismos.map((x) => x.id) });
-      continue;
-    }
-    const empate = [];
-    const id = choferDeCamion(f.camion, choferes, recibos, empate);
-    if (!id) { sinAsignar.push(f.camion); sinAsignarFilas.push({ ...det(f), empate: empate.map((e) => (choferes.find((x) => x.id === e) || {}).nombre || e) }); continue; }
-    montos[id] = (montos[id] || 0) + Number(f.neto_c);
-    camiones.push({ ...det(f), choferId: id });
-  }
+  const { montos, camiones, sinAsignar, sinAsignarFilas, noTitular } = asignarCamiones(filas, choferes, recibos);
   let cambios = 0;
   await tx(async (c) => {
     for (const [cid, monto] of Object.entries(montos)) {
@@ -282,6 +316,80 @@ async function sincronizarSap(fecha, usuarioId, forzar) {
   });
   return { configurado: true, fechaVenta: fv, consultado: filas[0] ? filas[0].consultado : null, camiones, sinAsignar, sinAsignarFilas, cambios };
 }
+
+/* ---------- liquidación del mes en Excel (formato "Liquidación <mes>") ---------- */
+// Una hoja por día de venta: liquidación inicial (sap_inicial), cambios en SAP después de esa lectura
+// (notas de crédito y facturas), crédito y dinero de los recibos de los choferes, y la liquidación final.
+api.get("/liquidacion.xlsx", A.requiere(...OFICINA), h(async (req, res) => {
+  const desde = String(req.query.desde || ""), ayer = sumarDias(hoyPanama(), -1);
+  let hasta = String(req.query.hasta || "");
+  if (!fechaValida(desde) || !fechaValida(hasta) || desde > hasta) return bad(res, "Escoge un período válido.");
+  if (hasta > ayer) hasta = ayer;
+  if (desde > hasta) return bad(res, "Todavía no hay venta para liquidar en esas fechas.");
+  if (sumarDias(desde, 62) < hasta) return bad(res, "El período puede tener como máximo 2 meses.");
+  let avisoSap = "";
+  if (SAP.configurado()) {
+    try { await leerSapRango(desde, hasta, req.user.id); }
+    catch (e) { console.error("SAP liquidación:", e.message); avisoSap = "No se pudo leer SAP al generar el archivo: se usó la última lectura guardada."; }
+  } else avisoSap = "La conexión con SAP no está configurada: se usó la última lectura guardada.";
+  const [{ rows: fin }, { rows: ini }, { rows: recs }, { rows: todos }] = await Promise.all([
+    q("SELECT * FROM sap_facturacion WHERE fecha_venta BETWEEN $1 AND $2 AND camion <> 'Sin camion'", [desde, hasta]),
+    q("SELECT * FROM sap_inicial WHERE fecha_venta BETWEEN $1 AND $2 AND camion <> 'Sin camion'", [desde, hasta]),
+    q("SELECT fecha, fecha_venta, chofer_id, ruta, adicional, ach_c, yappy_c, cheque_c, efectivo_c, credito FROM recibos WHERE fecha_venta BETWEEN $1 AND $2 ORDER BY adicional", [desde, hasta]),
+    q("SELECT id, nombre, ruta, tipo, activo, camion_sap FROM choferes ORDER BY orden, nombre"),
+  ]);
+  const activos = todos.filter((c) => c.activo);
+  const nombre = Object.fromEntries(todos.map((c) => [c.id, c.nombre]));
+  const tipo = Object.fromEntries(todos.map((c) => [c.id, c.tipo]));
+  const grupo = (rows) => { const g = {}; for (const r of rows) (g[r.fecha_venta] = g[r.fecha_venta] || []).push(r); return g; };
+  const gFin = grupo(fin), gIni = grupo(ini), gRec = grupo(recs);
+  const dias = [];
+  for (let fv = desde; fv <= hasta; fv = sumarDias(fv, 1)) {
+    const F = gFin[fv] || [], I = gIni[fv] || [], RC = gRec[fv] || [];
+    if (!F.length && !I.length && !RC.some((r) => tipo[r.chofer_id] !== "Food Services")) continue;
+    const sinInicial = !I.length; // días anteriores a esta función: la inicial es la lectura actual
+    const recibos = {};
+    for (const r of RC) if (!recibos[r.chofer_id]) recibos[r.chofer_id] = r;
+    const camSet = [...new Set([...F, ...(sinInicial ? [] : I)].map((x) => x.camion))];
+    const vacio = (camion) => ({ camion, documentos: 0, facturado_c: 0, merma_c: 0, devolucion_c: 0, neto_c: 0 });
+    const filasFin = camSet.map((cm) => F.find((x) => x.camion === cm) || vacio(cm));
+    const asig = asignarCamiones(filasFin, activos, recibos);
+    const cols = [];
+    for (const c of asig.camiones) cols.push({ camion: c.camion, choferes: c.comparten || [c.choferId] });
+    for (const c of asig.sinAsignarFilas) cols.push({ camion: c.camion, choferes: [], sinChofer: (c.empate || []).length ? "Empate: " + c.empate.join(" / ") : "Sin chofer" });
+    cols.sort((a, b) => a.camion.localeCompare(b.camion, "es", { numeric: true }));
+    // Choferes de ruta que entregaron dinero de esa venta pero no tienen camión en SAP ese día.
+    const conCol = new Set(cols.flatMap((c) => c.choferes));
+    for (const id of Object.keys(recibos)) if (!conCol.has(id) && tipo[id] !== "Food Services") { cols.push({ camion: "Sin venta SAP", choferes: [id] }); conCol.add(id); }
+    for (const col of cols) {
+      const f = F.find((x) => x.camion === col.camion) || vacio(col.camion);
+      const i = sinInicial ? f : (I.find((x) => x.camion === col.camion) || vacio(col.camion));
+      const n = (o, k) => Number(o[k] || 0);
+      col.chofer = col.sinChofer || col.choferes.map((id) => nombre[id] || id).join(" / ");
+      col.inicial = n(i, "neto_c");
+      col.notas = n(f, "devolucion_c") - n(i, "devolucion_c");                                     // notas de crédito (devolución) después de la inicial
+      col.facturas = (n(f, "facturado_c") - n(i, "facturado_c")) - (n(f, "merma_c") - n(i, "merma_c")); // facturas (y merma) después de la inicial
+      col.final = n(f, "neto_c");
+      const mios = RC.filter((r) => col.choferes.includes(r.chofer_id));
+      col.credito = mios.reduce((a, r) => a + (r.credito || []).reduce((b, x) => b + (Number(x.monto) || 0), 0), 0);
+      col.otros = mios.reduce((a, r) => a + r.ach_c + r.yappy_c + r.cheque_c, 0);
+      col.efectivo = mios.reduce((a, r) => a + r.efectivo_c, 0);
+      col.recibos = mios.length;
+      col.entrega = mios.length ? mios.map((r) => r.fecha).sort()[0] : null;
+    }
+    const lect = (rows) => rows.reduce((a, r) => (!a || r.consultado > a ? r.consultado : a), null);
+    dias.push({ fechaVenta: fv, entrega: cols.map((c) => c.entrega).filter(Boolean).sort()[0] || sumarDias(fv, new Date(fv + "T12:00:00Z").getUTCDay() === 6 ? 2 : 1),
+      cols, sinInicial, leidoInicial: sinInicial ? null : lect(I), leidoFinal: lect(F) });
+  }
+  if (!dias.length) return bad(res, "No hay venta DT de SAP ni recibos en esas fechas.", 404);
+  const { libroLiquidacion, nombreLibro } = require("./liquidacionXlsx");
+  const buf = await libroLiquidacion(dias, { aviso: avisoSap, generadoPor: req.user.nombre || req.user.usuario });
+  await audit(null, req.user.id, "liquidacion_excel", { desde, hasta, dias: dias.length });
+  const nom = nombreLibro(desde, hasta);
+  res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+  res.setHeader("Content-Disposition", "attachment; filename=\"" + nom.normalize("NFD").replace(/[̀-ͯ]/g, "") + "\"; filename*=UTF-8''" + encodeURIComponent(nom));
+  res.send(buf);
+}));
 
 /* ---------- oficina: verificar, eliminar, versiones ---------- */
 api.post("/recibos/:id/verificar", A.requiere(...OFICINA), h(async (req, res) => {

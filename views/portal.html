@@ -1006,7 +1006,7 @@ details.day .scroll { padding: 6px 10px 10px; }
     if (!can.oficina || !I || I.configurado === false) { box.hidden = true; return; }
     box.hidden = false;
     const titulo = el("h2", { text: "Facturación SAP · venta del " + longDate(I.fechaVenta || prevDay(S.pFecha)) });
-    if (I.error) { box.replaceChildren(titulo, el("div", { class: "notice warn", text: I.error + " Pulsa \"Actualizar SAP\" en unos minutos." })); return; }
+    if (I.error) { box.replaceChildren(titulo, el("div", { class: "notice warn", text: I.error + " Pulsa \"Actualizar SAP\" en unos minutos." }), liqBloque(I)); return; }
     const nombre = (id) => (DB.choferes.find((c) => c.id === id) || {}).nombre || id;
     const filas = [...(I.camiones || [])].sort((a, b) => a.camion.localeCompare(b.camion));
     const sinCh = I.sinAsignarFilas || [];
@@ -1021,7 +1021,35 @@ details.day .scroll { padding: 6px 10px 10px; }
     box.replaceChildren(...[titulo,
       el("p", { class: "muted small", text: "Neto = facturado − merma − devolución. Es la venta que se llena sola en cada chofer (salvo que se haya escrito a mano)." + (I.consultado ? " Leído " + when(I.consultado) + "." : "") }),
       el("div", { class: "scroll" }, el("table", { class: "ledger" }, el("thead", {}, el("tr", {}, th("Camión", "l"), th("Chofer", "l"), th("Documentos"), th("Facturado"), th("Merma"), th("Devolución"), th("Neto"))), body, foot)),
-      extra, filas.length ? pdfBloque(I) : null].filter(Boolean));
+      extra, filas.length ? pdfBloque(I) : null, liqBloque(I)].filter(Boolean));
+  }
+
+  /* ---------- Excel: liquidación del mes (formato "Liquidación <mes>"), una hoja por día de venta ---------- */
+  let LIQ = null;
+  function liqBloque(I) {
+    const fv = I.fechaVenta || prevDay(S.pFecha);
+    if (!LIQ) LIQ = { desde: fv.slice(0, 8) + "01", hasta: fv };
+    const campo = (label, k) => { const i = el("input", { type: "date", value: LIQ[k] }); i.addEventListener("change", () => { LIQ[k] = i.value; }); return el("label", { class: "field" }, label, i); };
+    const b = el("button", { class: "primary", text: "Descargar liquidación (Excel)", onclick: () => descargarLiquidacion(b) });
+    return el("div", {}, el("h3", { text: "Liquidación del mes (Excel)" }),
+      el("p", { class: "muted small", text: "Una hoja por día de venta, con el formato del Excel de liquidación: liquidación inicial (SAP de las 3:00 a. m.), crédito, notas de crédito y facturas hechas después en SAP, liquidación final, dinero recibido de los choferes y diferencia. Escoge las fechas de venta." }),
+      el("div", { class: "row" }, campo("Venta desde", "desde"), campo("Venta hasta", "hasta")),
+      el("div", { class: "btns", style: "margin-top:10px" }, b));
+  }
+  async function descargarLiquidacion(btn) {
+    if (!LIQ.desde || !LIQ.hasta || LIQ.desde > LIQ.hasta) { pStatus("Escoge un período válido.", "err"); return; }
+    btn.disabled = true; btn.textContent = "Leyendo SAP y armando el Excel…";
+    try {
+      const r = await fetch("/api/liquidacion.xlsx?desde=" + LIQ.desde + "&hasta=" + LIQ.hasta, { credentials: "same-origin" });
+      if (!r.ok) { let m = "No se pudo generar el Excel."; try { m = (await r.json()).error || m; } catch (e) {} throw new Error(m); }
+      const cd = r.headers.get("Content-Disposition") || "", m = /filename\*=UTF-8''([^;]+)/.exec(cd);
+      const nombreArch = m ? decodeURIComponent(m[1]) : "Liquidacion.xlsx";
+      const url = URL.createObjectURL(await r.blob());
+      const a = el("a", { href: url, download: nombreArch }); document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
+      pStatus("Excel descargado: " + nombreArch + ".", "ok");
+    } catch (e) { pStatus(e.message, "err"); }
+    finally { btn.disabled = false; btn.textContent = "Descargar liquidación (Excel)"; }
   }
 
   /* ---------- PDF: Reporte Inicial de Liquidación (venta inicial DTT de SAP) ---------- */

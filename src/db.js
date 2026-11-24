@@ -182,6 +182,19 @@ CREATE TABLE IF NOT EXISTS envios_reporte (
   creado timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS envios_reporte_fecha_idx ON envios_reporte (fecha_venta, tipo);
+-- Liquidación INICIAL: copia fija de la primera lectura de SAP hecha después del día de venta (normalmente la de las 3:00 a. m.).
+-- sap_facturacion se va actualizando con los cambios en SAP (liquidación final); esta tabla no se toca más.
+CREATE TABLE IF NOT EXISTS sap_inicial (
+  fecha_venta date NOT NULL,
+  camion text NOT NULL,
+  documentos int NOT NULL DEFAULT 0,
+  facturado_c bigint NOT NULL DEFAULT 0,
+  merma_c bigint NOT NULL DEFAULT 0,
+  devolucion_c bigint NOT NULL DEFAULT 0,
+  neto_c bigint NOT NULL DEFAULT 0,
+  consultado timestamptz NOT NULL,
+  PRIMARY KEY (fecha_venta, camion)
+);
 `;
 
 async function migrate() {
