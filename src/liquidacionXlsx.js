@@ -77,32 +77,39 @@ function hoja(wb, D, logo, opts) {
   if (n > 1) { ws.mergeCells(`B6:${ult}6`); ws.mergeCells(`B7:${ult}7`); }
   celda("B6", "", { fill: CLARO }); celda("B7", "", { fill: OSCURO });
 
-  // Filas por camión
+  // Filas por camión. La liquidación es de CONTADO: el crédito (clientes DT a crédito en SAP) va aparte y no se cobra en caja.
   const filas = [
-    [8, "Rutas"], [9, "Chofer"], [10, "Hora de Salida de Planta"], [11, "Liquidacion inicial Facturación"], [12, "Crédito"],
+    [8, "Rutas"], [9, "Chofer"], [10, "Hora de Salida de Planta"], [11, "Liquidacion inicial Facturación (contado)"], [12, "Crédito"],
     [13, "Notas de Credito No Entrega"], [14, "Factura De Merma Sin Entregar"], [15, "Liquidacion Final"], [16, "Cobrado"],
-    [17, "Diferencial Liquidacion Inicial /Final"], [18, "ACH O Cheques"], [19, "Dinero recibido en caja"], [20, "Diferencia en caja"],
+    [17, "Diferencial Liquidacion Inicial /Final"], [18, "ACH"], [19, "Yappy"], [20, "Cheque"], [21, "Efectivo"],
+    [22, "Dinero recibido en caja"], [23, "Diferencia en caja"],
   ];
   for (const [r, t] of filas) etiqueta(r, t);
-  for (const r of [11, 13, 14, 17, 20]) ws.getRow(r).height = 27;
+  for (const r of [11, 13, 14, 17, 22, 23]) ws.getRow(r).height = 27;
+  const AZUL = "FF0A4D8F";
   for (let i = 0; i < n; i++) {
     const L = C(i), col = D.cols[i];
-    if (!col) { for (let r = 8; r <= 20; r++) celda(L + r, undefined, r === 8 ? { fill: CLARO } : {}); continue; }
-    const fin = col.inicial - col.credito - col.notas + col.facturas;
+    if (!col) { for (let r = 8; r <= 23; r++) celda(L + r, undefined, r === 8 ? { fill: CLARO } : {}); continue; }
+    const fin = col.inicial - col.notas + col.facturas;
+    const recibido = col.ach + col.yappy + col.cheque + col.efectivo;
+    const rec = (v) => (col.recibos ? usd(v) : null);
     celda(L + 8, col.camion, { fill: CLARO });
     celda(L + 9, col.chofer.toUpperCase(), { size: 10, wrap: true });
     celda(L + 10, "");
     celda(L + 11, usd(col.inicial), { bold: true, fmt: NUM });
-    celda(L + 12, usd(col.credito), { fmt: NUM, color: "FF0A4D8F" });
+    celda(L + 12, usd(col.credito), { fmt: NUM });
     celda(L + 13, usd(col.notas), { fmt: NUM });
     celda(L + 14, usd(col.facturas), { fmt: NUM });
-    celda(L + 15, { formula: `+${L}11-${L}12-${L}13+${L}14`, result: usd(fin) }, { fmt: NUM });
+    celda(L + 15, { formula: `+${L}11-${L}13+${L}14`, result: usd(fin) }, { fmt: NUM });
     celda(L + 16, { formula: `${L}15`, result: usd(fin) }, { fmt: NUM });
-    celda(L + 17, { formula: `+${L}11-${L}12-${L}13+${L}14-${L}15`, result: 0 }, { bold: true, fmt: "0.00" });
-    celda(L + 18, col.recibos ? usd(col.otros) : null, { fmt: NUM, color: "FF0A4D8F" });
-    celda(L + 19, col.recibos ? usd(col.efectivo) : null, { fmt: NUM, color: "FF0A4D8F" });
-    const dif = fin - col.otros - col.efectivo;
-    celda(L + 20, { formula: `${L}15-${L}18-${L}19`, result: usd(dif) }, { fmt: NUM, bold: dif !== 0, color: dif > 0 ? "FFC8141B" : dif < 0 ? "FF1E7B34" : "FF000000" });
+    celda(L + 17, { formula: `+${L}11-${L}13+${L}14-${L}15`, result: 0 }, { bold: true, fmt: "0.00" });
+    celda(L + 18, rec(col.ach), { fmt: NUM, color: AZUL });
+    celda(L + 19, rec(col.yappy), { fmt: NUM, color: AZUL });
+    celda(L + 20, rec(col.cheque), { fmt: NUM, color: AZUL });
+    celda(L + 21, rec(col.efectivo), { fmt: NUM, color: AZUL });
+    celda(L + 22, { formula: `SUM(${L}18:${L}21)`, result: usd(recibido) }, { fmt: NUM, bold: true });
+    const dif = fin - recibido;
+    celda(L + 23, { formula: `${L}15-${L}22`, result: usd(dif) }, { fmt: NUM, bold: dif !== 0, color: dif > 0 ? "FFC8141B" : dif < 0 ? "FF1E7B34" : "FF000000" });
   }
   ws.getRow(9).height = D.cols.some((c) => c.chofer.length > 16) ? 42 : 27;
 
@@ -110,32 +117,33 @@ function hoja(wb, D, logo, opts) {
   const suma = (r) => `SUM(B${r}:${ult}${r})`;
   const tot = (k) => D.cols.reduce((a, c) => a + c[k], 0);
   const tIni = tot("inicial"), tCred = tot("credito"), tNot = tot("notas"), tFac = tot("facturas");
-  const tFin = tIni - tCred - tNot + tFac, tDep = tot("otros") + tot("efectivo");
-  ws.mergeCells("A21:B21"); celda("A21", "Totales Finales", { bold: true, size: 10, borde: false });
+  const tFin = tIni - tNot + tFac, tDep = tot("ach") + tot("yappy") + tot("cheque") + tot("efectivo");
+  ws.mergeCells("A24:B24"); celda("A24", "Totales Finales", { bold: true, size: 10, borde: false });
   const totales = [
-    [22, " Liquidacion Inicial", suma(11), tIni], [23, "Credito", suma(12), tCred], [24, "Total de Nota de Credito", suma(13), tNot],
-    [25, "Total Factura De Merma Sin Entregar", suma(14), tFac], [26, "Liquidacion Final", "+B22-B23-B24+B25", tFin],
-    [27, "Menos TLA", null, 0], [28, "Total de liquidacion sin TLA", "B26-B27", tFin], [29, "Asistente de Pago", suma(16), tFin],
-    [30, "Deposito de Caja - Chutra", `SUM(B18:${ult}19)`, tDep], [31, "Diferencia de Liquidacion Cobrado", "+B29-B30", tFin - tDep],
-    [32, "Aun no Cobrado / TLA", null, 0], [33, "Total Venta", "+B28+B32", tFin], [34, "Faltante de liquidacion - Choferes", "+B29-B30", tFin - tDep],
+    [25, " Liquidacion Inicial (contado)", suma(11), tIni], [26, "Credito", suma(12), tCred], [27, "Total de Nota de Credito", suma(13), tNot],
+    [28, "Total Factura De Merma Sin Entregar", suma(14), tFac], [29, "Liquidacion Final", "+B25-B27+B28", tFin],
+    [30, "Menos TLA", null, 0], [31, "Total de liquidacion sin TLA", "B29-B30", tFin], [32, "Asistente de Pago", suma(16), tFin],
+    [33, "Deposito de Caja - Chutra", suma(22), tDep], [34, "Diferencia de Liquidacion Cobrado", "+B32-B33", tFin - tDep],
+    [35, "Aun no Cobrado / TLA", null, 0], [36, "Total Venta (contado + crédito)", "+B31+B26+B35", tFin + tCred], [37, "Faltante de liquidacion - Choferes", "+B32-B33", tFin - tDep],
   ];
   for (const [r, t, f, v] of totales) {
     etiqueta(r, t);
     const st = { bold: true, fmt: CONT };
-    if (r === 31) st.color = ROJO;
-    if (r === 34) { st.color = ROJO; st.fill = AMARILLO; }
+    if (r === 34) st.color = ROJO;
+    if (r === 37) { st.color = ROJO; st.fill = AMARILLO; }
     celda("B" + r, f ? { formula: f, result: usd(v) } : 0, st);
   }
-  for (const r of [25, 28, 30, 31, 34]) ws.getRow(r).height = 27;
+  for (const r of [28, 31, 33, 34, 37]) ws.getRow(r).height = 27;
 
   // Notas de origen de los datos
   const notas = [
     "Liquidación inicial: " + (D.sinInicial ? "no hay lectura inicial guardada para este día; se usa la facturación actual de SAP." : "SAP leído el " + fechaHora(D.leidoInicial)),
     "Liquidación final: SAP" + (D.leidoFinal ? " leído el " + fechaHora(D.leidoFinal) : "") + " (canal DT). Notas de crédito y facturas = cambios en SAP después de la lectura inicial.",
-    "Crédito, ACH o cheques (incluye Yappy) y dinero recibido: recibos de los choferes en el portal Caja de Choferes.",
+    "Liquidación inicial y final = clientes DT de contado. Crédito = clientes DT con condición de pago a crédito en SAP (no se cobran en caja).",
+    "ACH, Yappy, cheque y efectivo: recibos de los choferes en el portal Caja de Choferes. Dinero recibido en caja = la suma de los cuatro.",
     "Generado el " + fechaHora(new Date()) + (opts.generadoPor ? " por " + opts.generadoPor : "") + (opts.aviso ? ". " + opts.aviso : "."),
   ];
-  notas.forEach((t, k) => { const c = ws.getCell("A" + (36 + k)); c.value = t.replace(/\.\.$/, ".").replace(/\. \./g, "."); c.font = { name: "Aptos Narrow", size: 9, italic: true, color: { argb: "FF5A6572" } }; });
+  notas.forEach((t, k) => { const c = ws.getCell("A" + (39 + k)); c.value = t.replace(/\.\.$/, ".").replace(/\. \./g, "."); c.font = { name: "Aptos Narrow", size: 9, italic: true, color: { argb: "FF5A6572" } }; });
 }
 
 module.exports = { libroLiquidacion, nombreLibro };

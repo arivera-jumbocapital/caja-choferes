@@ -195,6 +195,9 @@ CREATE TABLE IF NOT EXISTS sap_inicial (
   consultado timestamptz NOT NULL,
   PRIMARY KEY (fecha_venta, camion)
 );
+-- Parte del neto vendida a clientes a crédito (condición de pago con días). NULL = leído antes de separar crédito y contado.
+ALTER TABLE sap_facturacion ADD COLUMN IF NOT EXISTS credito_c bigint NULL;
+ALTER TABLE sap_inicial ADD COLUMN IF NOT EXISTS credito_c bigint NULL;
 `;
 
 async function migrate() {

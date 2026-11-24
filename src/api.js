@@ -212,7 +212,8 @@ async function leerSap(fv, usuarioId, forzar) {
   const { rows } = await q("SELECT * FROM sap_facturacion WHERE fecha_venta = $1", [fv]);
   const ultima = rows[0] ? new Date(rows[0].consultado).getTime() : sinDatos.get(fv) || 0;
   const cerrado = ultima > new Date(fv + "T00:00:00-05:00").getTime() + 2 * 864e5; // leído 2 días después: ya no cambia
-  if (forzar ? Date.now() - ultima < 60e3 : (rows.length && cerrado) || Date.now() - ultima < 15 * 60e3) return rows; // caché de 15 minutos
+  const completo = rows.every((r) => r.credito_c !== null); // leído antes de separar crédito y contado: se relee una vez
+  if (forzar ? Date.now() - ultima < 60e3 : (rows.length && cerrado && completo) || (completo && Date.now() - ultima < 15 * 60e3)) return rows; // caché de 15 minutos
   const filas = await SAP.resumenPorCamion(fv, fv);
   if (!filas.length) sinDatos.set(fv, Date.now());
   await tx((c) => guardarSap(c, fv, filas, usuarioId));
@@ -223,29 +224,32 @@ async function leerSap(fv, usuarioId, forzar) {
 async function guardarSap(c, fv, filas, usuarioId) {
   await c.query("DELETE FROM sap_facturacion WHERE fecha_venta = $1", [fv]);
   for (const f of filas) {
-    await c.query(`INSERT INTO sap_facturacion (fecha_venta, camion, documentos, facturado_c, merma_c, devolucion_c, neto_c, varios, consultado_por)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT (fecha_venta, camion) DO UPDATE SET documentos = sap_facturacion.documentos + EXCLUDED.documentos,
+    await c.query(`INSERT INTO sap_facturacion (fecha_venta, camion, documentos, facturado_c, merma_c, devolucion_c, neto_c, varios, consultado_por, credito_c)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT (fecha_venta, camion) DO UPDATE SET documentos = sap_facturacion.documentos + EXCLUDED.documentos,
+      credito_c = sap_facturacion.credito_c + EXCLUDED.credito_c,
       facturado_c = sap_facturacion.facturado_c + EXCLUDED.facturado_c, merma_c = sap_facturacion.merma_c + EXCLUDED.merma_c,
       devolucion_c = sap_facturacion.devolucion_c + EXCLUDED.devolucion_c, neto_c = sap_facturacion.neto_c + EXCLUDED.neto_c, varios = sap_facturacion.varios + EXCLUDED.varios`,
-    [fv, f.camion, f.documentos, f.facturado, f.merma, f.devolucion, f.neto, f.varios, usuarioId]);
+    [fv, f.camion, f.documentos, f.facturado, f.merma, f.devolucion, f.neto, f.varios, usuarioId, f.credito || 0]);
   }
   const hoy = hoyPanama();
   if (filas.length && hoy > fv && hoy <= sumarDias(fv, 2)) {
-    await c.query(`INSERT INTO sap_inicial (fecha_venta, camion, documentos, facturado_c, merma_c, devolucion_c, neto_c, consultado)
-      SELECT fecha_venta, camion, documentos, facturado_c, merma_c, devolucion_c, neto_c, consultado FROM sap_facturacion
+    await c.query(`INSERT INTO sap_inicial (fecha_venta, camion, documentos, facturado_c, merma_c, devolucion_c, neto_c, consultado, credito_c)
+      SELECT fecha_venta, camion, documentos, facturado_c, merma_c, devolucion_c, neto_c, consultado, credito_c FROM sap_facturacion
       WHERE fecha_venta = $1 AND NOT EXISTS (SELECT 1 FROM sap_inicial WHERE fecha_venta = $1)`, [fv]);
   }
 }
 // Pone al día varios días de venta con UNA sola consulta a SAP (para la liquidación del mes).
 // Respeta la misma caché que leerSap: un día leído 2 días después de la venta ya no cambia; si no, se relee cada 15 minutos.
 async function leerSapRango(desde, hasta, usuarioId) {
-  const { rows } = await q("SELECT fecha_venta, MIN(consultado) AS consultado FROM sap_facturacion WHERE fecha_venta BETWEEN $1 AND $2 GROUP BY fecha_venta", [desde, hasta]);
+  const { rows } = await q(`SELECT fecha_venta, MIN(consultado) AS consultado, bool_and(credito_c IS NOT NULL) AS completo
+    FROM sap_facturacion WHERE fecha_venta BETWEEN $1 AND $2 GROUP BY fecha_venta`, [desde, hasta]);
   const ult = Object.fromEntries(rows.map((r) => [r.fecha_venta, new Date(r.consultado).getTime()]));
+  const incompleto = new Set(rows.filter((r) => !r.completo).map((r) => r.fecha_venta)); // leídos antes de separar crédito y contado
   const pendientes = [];
   for (let f = desde; f <= hasta; f = sumarDias(f, 1)) {
     const u = ult[f] || sinDatos.get(f) || 0;
     const cerrado = ult[f] && u > new Date(f + "T00:00:00-05:00").getTime() + 2 * 864e5;
-    if (!cerrado && Date.now() - u >= 15 * 60e3) pendientes.push(f);
+    if (incompleto.has(f) || (!cerrado && Date.now() - u >= 15 * 60e3)) pendientes.push(f);
   }
   if (!pendientes.length) return;
   const filas = await SAP.resumenPorCamion(pendientes[0], pendientes[pendientes.length - 1], true);
@@ -366,14 +370,15 @@ api.get("/liquidacion.xlsx", A.requiere(...OFICINA), h(async (req, res) => {
       const i = sinInicial ? f : (I.find((x) => x.camion === col.camion) || vacio(col.camion));
       const n = (o, k) => Number(o[k] || 0);
       col.chofer = col.sinChofer || col.choferes.map((id) => nombre[id] || id).join(" / ");
-      col.inicial = n(i, "neto_c");
+      // Crédito: venta a clientes DT con condición de pago a crédito (SAP). La liquidación es solo de CONTADO.
+      const credF = n(f, "credito_c"), credI = i.credito_c == null ? credF : n(i, "credito_c");
+      col.inicial = n(i, "neto_c") - credI;                                                         // contado de la lectura inicial
+      col.credito = credF;
       col.notas = n(f, "devolucion_c") - n(i, "devolucion_c");                                     // notas de crédito (devolución) después de la inicial
-      col.facturas = (n(f, "facturado_c") - n(i, "facturado_c")) - (n(f, "merma_c") - n(i, "merma_c")); // facturas (y merma) después de la inicial
-      col.final = n(f, "neto_c");
+      col.facturas = (n(f, "facturado_c") - n(i, "facturado_c")) - (n(f, "merma_c") - n(i, "merma_c")) - (credF - credI); // facturas y merma de contado después de la inicial
+      col.final = n(f, "neto_c") - credF;                                                           // contado según SAP hoy
       const mios = RC.filter((r) => col.choferes.includes(r.chofer_id));
-      col.credito = mios.reduce((a, r) => a + (r.credito || []).reduce((b, x) => b + (Number(x.monto) || 0), 0), 0);
-      col.otros = mios.reduce((a, r) => a + r.ach_c + r.yappy_c + r.cheque_c, 0);
-      col.efectivo = mios.reduce((a, r) => a + r.efectivo_c, 0);
+      for (const k of ["ach", "yappy", "cheque", "efectivo"]) col[k] = mios.reduce((a, r) => a + r[k + "_c"], 0);
       col.recibos = mios.length;
       col.entrega = mios.length ? mios.map((r) => r.fecha).sort()[0] : null;
     }
