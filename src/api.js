@@ -339,7 +339,7 @@ api.get("/liquidacion.xlsx", A.requiere(...OFICINA), h(async (req, res) => {
   const [{ rows: fin }, { rows: ini }, { rows: recs }, { rows: todos }] = await Promise.all([
     q("SELECT * FROM sap_facturacion WHERE fecha_venta BETWEEN $1 AND $2 AND camion <> 'Sin camion'", [desde, hasta]),
     q("SELECT * FROM sap_inicial WHERE fecha_venta BETWEEN $1 AND $2 AND camion <> 'Sin camion'", [desde, hasta]),
-    q("SELECT fecha, fecha_venta, chofer_id, ruta, adicional, ach_c, yappy_c, cheque_c, efectivo_c, credito FROM recibos WHERE fecha_venta BETWEEN $1 AND $2 ORDER BY adicional", [desde, hasta]),
+    q("SELECT fecha, fecha_venta, chofer_id, ruta, adicional, ach_c, yappy_c, cheque_c, efectivo_c, total_c, verificado FROM recibos WHERE fecha_venta BETWEEN $1 AND $2 ORDER BY adicional", [desde, hasta]),
     q("SELECT id, nombre, ruta, tipo, activo, camion_sap FROM choferes ORDER BY orden, nombre"),
   ]);
   const activos = todos.filter((c) => c.activo);
@@ -370,15 +370,17 @@ api.get("/liquidacion.xlsx", A.requiere(...OFICINA), h(async (req, res) => {
       const i = sinInicial ? f : (I.find((x) => x.camion === col.camion) || vacio(col.camion));
       const n = (o, k) => Number(o[k] || 0);
       col.chofer = col.sinChofer || col.choferes.map((id) => nombre[id] || id).join(" / ");
-      // Crédito: venta a clientes DT con condición de pago a crédito (SAP). La liquidación es solo de CONTADO.
-      const credF = n(f, "credito_c"), credI = i.credito_c == null ? credF : n(i, "credito_c");
-      col.inicial = n(i, "neto_c") - credI;                                                         // contado de la lectura inicial
-      col.credito = credF;
+      // Inicial = total facturado (contado + crédito). Crédito = clientes DT con condición de pago a crédito (SAP), se resta.
+      // Final = inicial − crédito − notas + facturas = lo de contado que el chofer debe entregar.
+      col.inicial = n(i, "neto_c");
+      col.credito = n(f, "credito_c");
       col.notas = n(f, "devolucion_c") - n(i, "devolucion_c");                                     // notas de crédito (devolución) después de la inicial
-      col.facturas = (n(f, "facturado_c") - n(i, "facturado_c")) - (n(f, "merma_c") - n(i, "merma_c")) - (credF - credI); // facturas y merma de contado después de la inicial
-      col.final = n(f, "neto_c") - credF;                                                           // contado según SAP hoy
+      col.facturas = (n(f, "facturado_c") - n(i, "facturado_c")) - (n(f, "merma_c") - n(i, "merma_c")); // facturas y merma después de la inicial
+      col.final = n(f, "neto_c") - col.credito;
       const mios = RC.filter((r) => col.choferes.includes(r.chofer_id));
       for (const k of ["ach", "yappy", "cheque", "efectivo"]) col[k] = mios.reduce((a, r) => a + r[k + "_c"], 0);
+      col.cobrado = mios.filter((r) => r.verificado).reduce((a, r) => a + r.total_c, 0); // dinero recibido y verificado por la oficina
+      col.verificados = mios.filter((r) => r.verificado).length;
       col.recibos = mios.length;
       col.entrega = mios.length ? mios.map((r) => r.fecha).sort()[0] : null;
     }
