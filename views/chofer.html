@@ -77,6 +77,11 @@ h2 { font-family: var(--f-display); font-size: 1.05rem; margin: 0; }
 .cred-row .mon { font-family: var(--f-num); text-align: right; }
 .cred-row button { padding: 8px 10px; font-size: .85rem; }
 @media (max-width: 480px) { .cred-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; } .cred-row .cli { grid-column: 1 / -1; } }
+.recs { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.recs button { padding: 8px 12px; font-size: .9rem; font-weight: 600; display: inline-flex; gap: 6px; align-items: baseline; }
+.recs button .m { font-family: var(--f-num); font-weight: 500; font-size: .85rem; }
+.recs button.sel { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+.recs button.nuevo { border-style: dashed; color: var(--accent); }
 [hidden] { display: none !important; }
 </style>
 </head>
@@ -98,6 +103,7 @@ h2 { font-family: var(--f-display); font-size: 1.05rem; margin: 0; }
       <label class="field">Conductor<input type="text" id="f-chofer" readonly></label>
       <label class="field">Ruta / camión<input type="text" id="f-ruta" autocomplete="off" placeholder="Ej. Colón 01 · CAM 88"></label>
     </div>
+    <div class="recs" id="recs" hidden></div>
     <div class="estado" id="estado" role="status">Cargando…</div>
   </div>
 
@@ -172,6 +178,8 @@ h2 { font-family: var(--f-display); font-size: 1.05rem; margin: 0; }
   var store = { get: function (k) { try { return localStorage.getItem(k); } catch (e) { return null; } }, set: function (k, v) { try { localStorage.setItem(k, v); } catch (e) {} }, del: function (k) { try { localStorage.removeItem(k); } catch (e) {} } };
 
   var ME = null, SAVED = null, DRAFT = "", dirty = false;
+  // Recibos del chofer en la fecha escogida. CUR = número (adicional) del recibo abierto, o null si es un recibo nuevo.
+  var LIST = [], CUR = 0;
 
   function api(method, url, body) {
     return fetch(url, { method: method, credentials: "same-origin", headers: body !== undefined ? { "Content-Type": "application/json" } : {}, body: body !== undefined ? JSON.stringify(body) : undefined })
@@ -256,27 +264,56 @@ h2 { font-family: var(--f-display); font-size: 1.05rem; margin: 0; }
     document.querySelectorAll(".wrap input:not([readonly]), .wrap textarea").forEach(function (i) { i.disabled = lock && i.id !== "f-fecha"; });
     $("btn-save").disabled = lock; $("btn-clear").disabled = lock; $("btn-down").disabled = !SAVED;
     document.querySelectorAll("#cred-add, #cred button").forEach(function (b) { b.disabled = lock; });
-    if (!saveArm) $("btn-save").textContent = SAVED ? "Guardar corrección" : "Guardar recibo";
+    if (!saveArm) $("btn-save").textContent = SAVED ? "Guardar corrección" : (LIST.length ? "Guardar recibo nuevo" : "Guardar recibo");
+    pintarRecs();
     if (lock && SAVED.verificado) { e.className = "estado lock"; e.textContent = "✔ Verificado por la oficina" + (SAVED.verificadoPor ? " (" + SAVED.verificadoPor + ")" : "") + ". Ya no se puede cambiar. Si hay un error, avísale a la oficina."; }
     else if (lock && SAVED.ajustado) { e.className = "estado lock"; e.textContent = "🔒 La oficina revisó y ajustó las cantidades de este recibo" + (SAVED.ajustadoEl ? " (" + when(SAVED.ajustadoEl) + ")" : "") + ". Ya no se puede cambiar. Si tienes dudas, habla con la oficina."; }
     else if (lock) { e.className = "estado lock"; e.textContent = "🔒 Recibo cerrado: ya usaste tu única corrección (" + when(SAVED.actualizado) + "). La oficina ya lo puede ver. Si hay otro error, avísale a la oficina."; }
     else if (SAVED && !dirty) { e.className = "estado ok"; e.textContent = "✔ Recibo guardado (" + when(SAVED.actualizado) + "). La oficina ya lo puede ver. Si te equivocaste, puedes corregirlo UNA sola vez; después queda cerrado."; }
     else if (SAVED) { e.className = "estado warn"; e.textContent = "Tienes cambios sin guardar. Solo puedes corregir el recibo UNA vez: revisa bien antes de tocar \"Guardar corrección\"."; }
+    else if (LIST.length) { e.className = "estado warn"; e.textContent = "Recibo nuevo del " + longDate($("f-fecha").value) + ": queda SEPARADO de los que ya guardaste. Escribe solo el dinero de este recibo."; }
     else if (dirty) { e.className = "estado warn"; e.textContent = "Todavía no has guardado el recibo del " + longDate($("f-fecha").value) + "."; }
     else { e.className = "estado"; e.textContent = "No hay recibo guardado para el " + longDate($("f-fecha").value) + "."; }
   }
+  // Pestañas con los recibos del día y el botón "Nuevo recibo".
+  function pintarRecs() {
+    var box = $("recs"); box.innerHTML = "";
+    if (!LIST.length) { box.hidden = true; return; }
+    box.hidden = false;
+    LIST.forEach(function (r, i) {
+      var b = document.createElement("button"); b.type = "button"; if (CUR === r.adicional) b.className = "sel";
+      b.innerHTML = "Recibo " + (i + 1) + ' <span class="m">' + fmt(r.total) + "</span>";
+      b.addEventListener("click", function () { if (CUR !== r.adicional) abrir(r.adicional); });
+      box.appendChild(b);
+    });
+    var n = document.createElement("button"); n.type = "button"; n.className = "nuevo" + (CUR === null ? " sel" : "");
+    n.textContent = CUR === null ? "Recibo " + (LIST.length + 1) + " (nuevo)" : "+ Nuevo recibo";
+    n.addEventListener("click", function () { if (CUR !== null) abrir(null); });
+    box.appendChild(n);
+  }
+  // Abre un recibo guardado (número) o uno nuevo en blanco (null) de la fecha que está en pantalla.
+  function abrir(a) {
+    var f = $("f-fecha").value;
+    CUR = a; SAVED = null; saveArm = false; status("");
+    LIST.forEach(function (r) { if (r.adicional === a) SAVED = r; });
+    DRAFT = draftKey(f, a); var d = null;
+    try { d = JSON.parse(store.get(DRAFT) || "null"); } catch (e) {}
+    if (d && SAVED && !SAVED.verificado && new Date(SAVED.actualizado) < new Date(d.cuando || 0)) { fill(d, f); dirty = true; }
+    else if (SAVED) { fill(SAVED, f); dirty = false; store.del(DRAFT); }
+    else if (d) { fill(d, f); dirty = true; }
+    else { fill(null, f); dirty = false; }
+    estado(); marcarHist();
+  }
 
-  function draftKey(f) { return "tasty.recibo.borrador." + ME.id + "." + f; }
-  function cargarFecha(f) {
-    DRAFT = draftKey(f); status("");
+  function draftKey(f, a) { return "tasty.recibo.borrador." + ME.id + "." + f + (a === 0 ? "" : a === null ? ".nuevo" : "." + a); }
+  // a: número del recibo a abrir; si no se indica, el primero del día (o uno nuevo si no hay).
+  function cargarFecha(f, a) {
+    status("");
     return api("GET", "/api/recibos/mio?fecha=" + encodeURIComponent(f)).then(function (j) {
-      SAVED = j.recibo; var d = null;
-      try { d = JSON.parse(store.get(DRAFT) || "null"); } catch (e) {}
-      if (d && SAVED && !SAVED.verificado && new Date(SAVED.actualizado) < new Date(d.cuando || 0)) { fill(d, f); dirty = true; }
-      else if (SAVED) { fill(SAVED, f); dirty = false; store.del(DRAFT); }
-      else if (d) { fill(d, f); dirty = true; }
-      else { fill(null, f); dirty = false; }
-      estado(); marcarHist();
+      LIST = j.recibos || (j.recibo ? [j.recibo] : []);
+      $("f-fecha").value = f;
+      var hay = LIST.some(function (r) { return r.adicional === a; });
+      abrir(a === null ? null : hay ? a : LIST.length ? LIST[0].adicional : 0);
     }).catch(function (e) { status(e.message, "err"); });
   }
 
@@ -305,15 +342,20 @@ h2 { font-family: var(--f-display); font-size: 1.05rem; margin: 0; }
     }
     saveArm = false; clearTimeout(saveTimer);
     b.disabled = true; b.textContent = "Guardando…";
-    api("PUT", "/api/recibos/mio", x.r).then(function (j) {
+    var body = Object.assign({}, x.r); if (CUR === null) body.nuevo = true; else body.adicional = CUR;
+    api("PUT", "/api/recibos/mio", body).then(function (j) {
       SAVED = j.recibo; dirty = false; store.del(DRAFT);
+      var nuevo = CUR === null; CUR = SAVED.adicional;
+      var k = -1; LIST.forEach(function (r, i) { if (r.adicional === SAVED.adicional) k = i; });
+      if (k >= 0) LIST[k] = SAVED; else { LIST.push(SAVED); LIST.sort(function (p, q) { return p.adicional - q.adicional; }); }
       fill(SAVED, SAVED.fecha); estado();
-      status((SAVED.correcciones ? "Corrección guardada: " : "Recibo guardado: ") + fmt(SAVED.total) + ". La oficina ya lo puede ver. Puedes descargarlo abajo.", "ok");
+      var num = LIST.indexOf(SAVED) + 1;
+      status((SAVED.correcciones ? "Corrección guardada: " : nuevo && num > 1 ? "Recibo " + num + " guardado aparte: " : "Recibo guardado: ") + fmt(SAVED.total) + ". La oficina ya lo puede ver. Puedes descargarlo abajo.", "ok");
       cargarHist();
     }).catch(function (e) {
       status(e.message, "err");
       // Si el servidor dice que ya está cerrado, se vuelve a cargar lo guardado.
-      if (/cerrado|verific/.test(e.message)) cargarFecha($("f-fecha").value);
+      if (/cerrado|verific|ya no existe/.test(e.message)) cargarFecha($("f-fecha").value, CUR);
     }).then(function () { estado(); });
   });
 
@@ -362,7 +404,8 @@ h2 { font-family: var(--f-display); font-size: 1.05rem; margin: 0; }
   }
   $("btn-down").addEventListener("click", function () {
     if (!SAVED) { status("Primero guarda el recibo.", "err"); return; }
-    var name = "Recibo " + ME.chofer.nombre + " " + SAVED.fecha + ".html";
+    var num = LIST.indexOf(SAVED) + 1;
+    var name = "Recibo " + ME.chofer.nombre + " " + SAVED.fecha + (num > 1 ? " (" + num + ")" : "") + ".html";
     var a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([reciboHtml(SAVED)], { type: "text/html" })); a.download = name;
     document.body.appendChild(a); a.click(); setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 2000);
     status("Recibo descargado: " + name + (dirty ? " (es el último guardado, sin los cambios que no has guardado)." : "."), "ok");
@@ -394,18 +437,23 @@ h2 { font-family: var(--f-display); font-size: 1.05rem; margin: 0; }
   $("logout").addEventListener("click", function () { api("POST", "/api/logout", {}).catch(function () {}).then(function () { location.replace("/login"); }); });
 
   var HIST = [];
-  function marcarHist() { document.querySelectorAll("#hist button").forEach(function (b) { b.classList.toggle("sel", b.dataset.f === $("f-fecha").value); }); }
+  function marcarHist() { document.querySelectorAll("#hist button").forEach(function (b) { b.classList.toggle("sel", b.dataset.f === $("f-fecha").value && Number(b.dataset.a) === CUR); }); }
   function cargarHist() {
     api("GET", "/api/recibos/mios").then(function (j) {
       HIST = j.recibos; var h = $("hist"); h.innerHTML = "";
       if (!HIST.length) { h.innerHTML = '<p class="hint">Todavía no tienes recibos guardados.</p>'; return; }
+      var cuenta = {};
       HIST.forEach(function (r) {
-        var b = document.createElement("button"); b.type = "button"; b.dataset.f = r.fecha;
-        var a = document.createElement("span"); a.textContent = longDate(r.fecha);
+        cuenta[r.fecha] = (cuenta[r.fecha] || 0) + 1;
+        r._n = 1 + HIST.filter(function (x) { return x.fecha === r.fecha && x.adicional < r.adicional; }).length;
+      });
+      HIST.forEach(function (r) {
+        var b = document.createElement("button"); b.type = "button"; b.dataset.f = r.fecha; b.dataset.a = r.adicional;
+        var a = document.createElement("span"); a.textContent = longDate(r.fecha) + (cuenta[r.fecha] > 1 ? " · recibo " + r._n : "");
         if (r.verificado) { var p = document.createElement("span"); p.className = "pill"; p.textContent = "Verificado"; a.appendChild(p); }
         var t = document.createElement("span"); t.textContent = fmt(r.total);
         b.appendChild(a); b.appendChild(t);
-        b.addEventListener("click", function () { cargarFecha(r.fecha); window.scrollTo({ top: 0, behavior: "smooth" }); });
+        b.addEventListener("click", function () { cargarFecha(r.fecha, r.adicional); window.scrollTo({ top: 0, behavior: "smooth" }); });
         h.appendChild(b);
       });
       marcarHist();

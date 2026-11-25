@@ -98,7 +98,8 @@ Al abrir un día en el **Panel**, el portal lee SAP (facturas y notas de crédit
 ## Reglas que respeta el servidor
 
 - Para un chofer, el chofer del recibo sale **siempre de su usuario**; no puede registrar a nombre de otro.
-- El chofer puede **corregir su recibo una sola vez** (se le pide confirmar con un segundo toque). Al segundo intento el servidor lo rechaza y el recibo queda cerrado. Guardar exactamente lo mismo no cuenta como corrección. En el Panel aparece la etiqueta "Corregido 1 vez".
+- El chofer puede guardar **varios recibos en la misma fecha** con el botón **"+ Nuevo recibo"**: cada uno queda separado (Recibo 1, Recibo 2…), con su propio total y su propia corrección. En el Panel salen como "otro recibo del chofer" y la diferencia contra la venta suma todos sus recibos del día. El chofer no ve ni puede cambiar los recibos que emite la oficina.
+- El chofer puede **corregir cada recibo una sola vez** (se le pide confirmar con un segundo toque). Al segundo intento el servidor lo rechaza y el recibo queda cerrado. Guardar exactamente lo mismo no cuenta como corrección. En el Panel aparece la etiqueta "Corregido 1 vez".
 - Si hace falta darle otra oportunidad, la oficina puede eliminar el recibo (queda copia en Historial) para que el chofer lo registre de nuevo.
 - Un recibo **verificado** ya no lo puede cambiar el chofer.
 - El chofer puede anotar **clientes a crédito** (cliente, factura y monto). Son informativos: no suman al total entregado ni a los depósitos. En el Panel (*Recibos del día*) la columna **Crédito** sí entra en el Total para calcular la diferencia contra lo facturado.

@@ -484,7 +484,7 @@ details.day .scroll { padding: 6px 10px 10px; }
     }
     return out;
   }
-  const nomR = (r) => r.chofer + (r.adicional ? " (adicional · venta " + ddmm(r.fechaVenta) + ")" : "");
+  const nomR = (r) => r.chofer + (!r.adicional ? "" : r.origen === "oficina" ? " (adicional · venta " + ddmm(r.fechaVenta) + ")" : " (otro recibo del chofer · venta " + ddmm(r.fechaVenta) + ")");
   function sums(r) {
     let bill = 0, mon = 0;
     for (const d of DENOMS) { const c = (r.conteo?.[d.k] || 0) * d.cents; if (d.tipo === "Billetes") bill += c; else mon += c; }

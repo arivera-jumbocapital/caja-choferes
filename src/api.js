@@ -78,14 +78,17 @@ api.put("/choferes", A.requiere(...GERENTE), h(async (req, res) => {
 }));
 
 /* ---------- el chofer y su propio recibo ---------- */
+// Un chofer puede guardar VARIOS recibos en la misma fecha de entrega (botón "Nuevo recibo"); cada uno queda separado
+// (columna adicional 0, 1, 2…) y tiene su propia corrección. Los recibos que emite la oficina (origen 'oficina') no los ve.
 api.get("/recibos/mio", A.requiere("chofer"), h(async (req, res) => {
   const fecha = req.query.fecha;
   if (!fechaValida(fecha)) return bad(res, "Fecha no válida.");
-  const r = await R.porFechaChofer({ query: q }, fecha, req.user.chofer_id);
-  res.json({ recibo: r ? R.out(r) : null });
+  const { rows } = await q(R.SELECT + " WHERE r.fecha = $1 AND r.chofer_id = $2 AND r.origen <> 'oficina' ORDER BY r.adicional", [fecha, req.user.chofer_id]);
+  const recibos = rows.map(R.out);
+  res.json({ recibo: recibos[0] || null, recibos });
 }));
 api.get("/recibos/mios", A.requiere("chofer"), h(async (req, res) => {
-  const { rows } = await q(R.SELECT + " WHERE r.chofer_id = $1 AND r.adicional = 0 ORDER BY r.fecha DESC LIMIT 15", [req.user.chofer_id]);
+  const { rows } = await q(R.SELECT + " WHERE r.chofer_id = $1 AND r.origen <> 'oficina' ORDER BY r.fecha DESC, r.adicional LIMIT 20", [req.user.chofer_id]);
   res.json({ recibos: rows.map(R.out) });
 }));
 api.put("/recibos/mio", A.requiere("chofer"), h(async (req, res) => {
@@ -99,7 +102,15 @@ api.put("/recibos/mio", A.requiere("chofer"), h(async (req, res) => {
   d.fecha = b.fecha; d.fechaVenta = fechaValida(b.fechaVenta) ? b.fechaVenta : fechaVentaDe(b.fecha);
   d.choferId = req.user.chofer_id; // siempre del usuario, nunca del cuerpo de la petición
   const r = await tx(async (c) => {
-    const prev = await R.porFechaChofer(c, d.fecha, d.choferId, true);
+    await c.query("SELECT pg_advisory_xact_lock(hashtext($1))", [d.fecha + "|" + d.choferId]);
+    if (b.nuevo) {
+      // Recibo nuevo y separado en la misma fecha: el primer número libre (0 si no tiene ninguno; si no, el siguiente).
+      const { rows } = await c.query("SELECT coalesce(max(adicional), -1) + 1 AS n, bool_or(adicional = 0) AS hay0 FROM recibos WHERE fecha = $1 AND chofer_id = $2", [d.fecha, d.choferId]);
+      d.adicional = rows[0].hay0 ? rows[0].n : 0;
+    } else d.adicional = Math.max(0, Math.floor(Number(b.adicional) || 0));
+    const prev = await R.porFechaChofer(c, d.fecha, d.choferId, true, d.adicional);
+    if (prev && prev.origen === "oficina") return { error: "Ese recibo lo emitió la oficina. Toca \"Nuevo recibo\" para registrar otro." };
+    if (!prev && d.adicional > 0 && !b.nuevo) return { error: "Ese recibo ya no existe. Vuelve a cargar la página." };
     if (prev && prev.verificado) return { error: "La oficina ya verificó este recibo. Si hay un error, avísale a la oficina." };
     if (prev && prev.ajustado_el) return { error: "La oficina ya ajustó el conteo de este recibo. Si hay un error, avísale a la oficina." };
     if (prev) {
@@ -112,7 +123,7 @@ api.put("/recibos/mio", A.requiere("chofer"), h(async (req, res) => {
       if ((prev.correcciones || 0) >= 1) return { error: "Ya corregiste este recibo una vez y quedó cerrado. Si hay otro error, avísale a la oficina." };
     }
     const w = await R.escribir(c, d, { usuarioId: req.user.id, origen: "chofer", motivo: "Corregido por el chofer", correcciones: prev ? (prev.correcciones || 0) + 1 : 0 });
-    await audit(c, req.user.id, prev ? "recibo_corregido" : "recibo_nuevo", { fecha: d.fecha, chofer: d.choferId, total: d.total });
+    await audit(c, req.user.id, prev ? "recibo_corregido" : "recibo_nuevo", { fecha: d.fecha, chofer: d.choferId, adicional: d.adicional, total: d.total });
     return R.out(await R.porId(c, w.id));
   });
   if (r.error) return bad(res, r.error, 409);
