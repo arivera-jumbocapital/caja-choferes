@@ -4,7 +4,7 @@
 // - Manual: botón "Enviar por correo ahora" en el Panel.
 // Cómo se envía (variables de entorno; las claves NUNCA van en el código):
 //   Microsoft 365 (Graph):  MS_TENANT_ID, MS_CLIENT_ID, MS_CLIENT_SECRET, CORREO_REMITENTE (buzón que envía)
-//   SMTP (p. ej. Outlook):  SMTP_HOST, SMTP_PORT (587), SMTP_USER, SMTP_PASS, CORREO_REMITENTE (opcional)
+//   SMTP (p. ej. Outlook):  SMTP_HOST, SMTP_PORT (587), SMTP_USER, SMTP_PASSWORD (o SMTP_PASS), SMTP_FROM (opcional). Tiene prioridad.
 //   Pruebas locales:        CORREO_ARCHIVO=<carpeta>  (guarda el correo como .eml, no envía nada)
 const fs = require("fs");
 const path = require("path");
@@ -38,10 +38,12 @@ function limpiarCorreos(lista) {
 }
 
 /* ---------- cómo se envía ---------- */
+// La clave SMTP puede venir como SMTP_PASSWORD o SMTP_PASS; el remitente como SMTP_FROM o CORREO_REMITENTE.
+const smtpClave = () => process.env.SMTP_PASSWORD || process.env.SMTP_PASS;
 function transporte() {
   const e = process.env;
+  if (e.SMTP_HOST && e.SMTP_USER && smtpClave()) return { tipo: "SMTP", remitente: e.SMTP_FROM || e.CORREO_REMITENTE || e.SMTP_USER };
   if (e.MS_TENANT_ID && e.MS_CLIENT_ID && e.MS_CLIENT_SECRET && e.CORREO_REMITENTE) return { tipo: "Microsoft 365", remitente: e.CORREO_REMITENTE };
-  if (e.SMTP_HOST && e.SMTP_USER && e.SMTP_PASS) return { tipo: "SMTP", remitente: e.CORREO_REMITENTE || e.SMTP_USER };
   if (e.CORREO_ARCHIVO) return { tipo: "archivo de prueba", remitente: e.CORREO_REMITENTE || "reportes@prueba.local" };
   return null;
 }
@@ -72,7 +74,7 @@ async function enviarCorreo({ para, asunto, html, texto, adjunto }) {
     attachments: [{ filename: adjunto.nombre, content: adjunto.datos, contentType: "application/pdf" }] };
   if (t.tipo === "SMTP") {
     const port = Number(e.SMTP_PORT || 587);
-    const tr = nodemailer.createTransport({ host: e.SMTP_HOST, port, secure: port === 465, auth: { user: e.SMTP_USER, pass: e.SMTP_PASS }, connectionTimeout: 20000 });
+    const tr = nodemailer.createTransport({ host: e.SMTP_HOST, port, secure: port === 465, auth: { user: e.SMTP_USER, pass: smtpClave() }, requireTLS: port === 587, connectionTimeout: 20000 });
     await tr.sendMail(msg);
     return;
   }
