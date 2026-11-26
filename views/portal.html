@@ -1061,10 +1061,38 @@ details.day .scroll { padding: 6px 10px 10px; }
     const campo = (label, k) => { const i = el("input", { type: "date", value: PDFF[k] }); i.addEventListener("change", () => { PDFF[k] = i.value; }); return el("label", { class: "field" }, label, i); };
     const b = el("button", { class: "primary", text: "Descargar PDF", onclick: () => pdfLiquidacion(I, b) });
     const env = el("button", { text: "Enviar por correo ahora", onclick: () => enviarCorreo(env) });
-    return el("div", {}, el("h3", { text: "Reporte inicial de liquidación (PDF)" }),
-      el("p", { class: "muted small", text: "Venta inicial DTT según SAP, con el logo y las fechas de abajo. Revisa las fechas antes de descargar." }),
+    const cop = el("button", { text: "Copia del correo enviado", hidden: true, onclick: () => descargarCopia(fv, cop) });
+    const nota = el("p", { class: "muted small", text: "Venta inicial DTT según SAP, con el logo y las fechas de abajo. Revisa las fechas antes de descargar." });
+    // Si ya se envió el correo de esta venta, el PDF usa la liquidación inicial guardada en ese momento.
+    inicialDe(fv).then((C) => {
+      if (!C) return;
+      cop.hidden = false;
+      nota.textContent = "Liquidación inicial guardada al enviar el correo (" + when(C.enviado) + "): el PDF y los reenvíos usan esas cifras, aunque SAP cambie después con las liquidaciones de la tarde. Neto inicial: " + fmt((C.camiones || []).reduce((a, x) => a + (x.neto || 0), 0)) + ".";
+    });
+    return el("div", {}, el("h3", { text: "Reporte inicial de liquidación (PDF)" }), nota,
       el("div", { class: "row" }, campo("Fecha de factura", "factura"), campo("Fecha de cobro", "cobro")),
-      el("div", { class: "btns", style: "margin-top:10px" }, b, env));
+      el("div", { class: "btns", style: "margin-top:10px" }, b, env, cop));
+  }
+  const INICIAL = {};
+  async function inicialDe(fv) {
+    if (!(fv in INICIAL)) { try { const r = await api("GET", "/api/reporte/inicial?venta=" + fv); INICIAL[fv] = r.id ? r : null; } catch (e) { return null; } }
+    return INICIAL[fv];
+  }
+  async function bajarArchivo(url, porDefecto) {
+    const r = await fetch(url, { credentials: "same-origin" });
+    if (!r.ok) { let m = "No se pudo descargar."; try { m = (await r.json()).error || m; } catch (e) {} throw new Error(m); }
+    const m = /filename\*=UTF-8''([^;]+)/.exec(r.headers.get("Content-Disposition") || "");
+    const nombreArch = m ? decodeURIComponent(m[1]) : porDefecto;
+    const u = URL.createObjectURL(await r.blob());
+    const a = el("a", { href: u, download: nombreArch }); document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(u), 10000);
+    return nombreArch;
+  }
+  async function descargarCopia(fv, btn) {
+    btn.disabled = true;
+    try { pStatus("Descargado: " + (await bajarArchivo("/api/reporte/copia.pdf?venta=" + fv, "copia.pdf")) + ".", "ok"); }
+    catch (e) { pStatus(e.message, "err"); }
+    finally { btn.disabled = false; }
   }
   // Envía el mismo PDF (armado en el servidor) a los correos de Usuarios → Reporte por correo.
   async function enviarCorreo(btn) {
@@ -1075,6 +1103,7 @@ details.day .scroll { padding: 6px 10px 10px; }
       const { venta, factura, despacho, cobro } = PDFF;
       const r = await api("POST", "/api/reporte/enviar", { fecha: S.pFecha, fechas: { venta, factura, despacho, cobro } });
       pStatus(r.detalle, r.estado === "enviado" ? "ok" : "err");
+      if (r.estado === "enviado") { delete INICIAL[venta]; renderAll(); }
     } catch (e) { pStatus(e.message, "err"); }
     finally { btn.disabled = false; btn.textContent = "Enviar por correo ahora"; }
   }
@@ -1088,6 +1117,8 @@ details.day .scroll { padding: 6px 10px 10px; }
       await cargarScript("/liquidacion.js?v=2");
       const { jsPDF } = window.jspdf;
       const doc = new jsPDF({ unit: "mm", format: "letter" });
+      const C = await inicialDe(PDFF.venta); // liquidación inicial guardada al enviar el correo (si ya se envió)
+      if (C) I = C;
       window.Liquidacion.dibujarLiquidacion(doc, { camiones: I.camiones, sinAsignarFilas: I.sinAsignarFilas, consultado: I.consultado,
         fechas: PDFF, logo: LOGO_DATA, generadoPor: ME ? ME.nombre || ME.usuario : "",
         nombre: (id) => (DB.choferes.find((c) => c.id === id) || {}).nombre || id });
@@ -1158,9 +1189,10 @@ details.day .scroll { padding: 6px 10px 10px; }
     t.textContent = R.transporte ? "Se envía por " + R.transporte + " desde " + R.remitente + "." : "Falta configurar en el servidor la cuenta que envía los correos (Microsoft 365 o SMTP). Mientras tanto no se envía nada; los correos sí quedan guardados.";
     const EST = { enviado: "Enviado", error: "Error", sin_datos: "Sin venta" };
     const filas = (R.envios || []).map((e) => el("tr", {}, td(when(e.creado), "l"), td(longDate(e.fechaVenta), "l"), td(e.tipo === "automatico" ? "Automático" : "Manual" + (e.por ? " · " + e.por : ""), "l"),
-      td(EST[e.estado] || e.estado, "l " + (e.estado === "enviado" ? "pos" : e.estado === "error" ? "neg" : "")), td(e.total == null ? "—" : fmt(e.total)), td((e.destinatarios || []).join(", ") + (e.detalle ? " · " + e.detalle : ""), "l muted")));
-    $("rc-envios").replaceChildren(el("thead", {}, el("tr", {}, th("Cuándo", "l"), th("Venta del", "l"), th("Tipo", "l"), th("Estado", "l"), th("Neto"), th("Destinatarios", "l"))),
-      el("tbody", {}, ...(filas.length ? filas : [el("tr", {}, el("td", { colspan: "6", class: "l" }, el("div", { class: "empty", text: "Todavía no se ha enviado ningún reporte." })))])));
+      td(EST[e.estado] || e.estado, "l " + (e.estado === "enviado" ? "pos" : e.estado === "error" ? "neg" : "")), td(e.total == null ? "—" : fmt(e.total)), td((e.destinatarios || []).join(", ") + (e.detalle ? " · " + e.detalle : ""), "l muted"),
+      el("td", { class: "l" }, e.tienePdf ? el("button", { class: "small", text: "PDF", onclick: (ev) => bajarArchivo("/api/reporte/copia.pdf?id=" + e.id, "copia.pdf").catch((x) => rcStatus(x.message, "err")) }) : "—")));
+    $("rc-envios").replaceChildren(el("thead", {}, el("tr", {}, th("Cuándo", "l"), th("Venta del", "l"), th("Tipo", "l"), th("Estado", "l"), th("Neto"), th("Destinatarios", "l"), th("Copia", "l"))),
+      el("tbody", {}, ...(filas.length ? filas : [el("tr", {}, el("td", { colspan: "7", class: "l" }, el("div", { class: "empty", text: "Todavía no se ha enviado ningún reporte." })))])));
   }
   $("rc-guardar").addEventListener("click", async () => {
     const correos = $("rc-correos").value.split(/[\s,;]+/).filter(Boolean);

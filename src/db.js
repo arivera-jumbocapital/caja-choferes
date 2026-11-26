@@ -198,6 +198,12 @@ CREATE TABLE IF NOT EXISTS sap_inicial (
 -- Parte del neto vendida a clientes a crédito (condición de pago con días). NULL = leído antes de separar crédito y contado.
 ALTER TABLE sap_facturacion ADD COLUMN IF NOT EXISTS credito_c bigint NULL;
 ALTER TABLE sap_inicial ADD COLUMN IF NOT EXISTS credito_c bigint NULL;
+-- De dónde salió la liquidación inicial: 'lectura' (primera lectura de SAP después del día de venta) o
+-- 'correo' (copia fija tomada al enviar el correo del Reporte Inicial de Liquidación; manda sobre la lectura).
+ALTER TABLE sap_inicial ADD COLUMN IF NOT EXISTS fuente text NOT NULL DEFAULT 'lectura';
+-- Copia exacta de lo que se envió por correo: datos por camión y el PDF adjunto.
+ALTER TABLE envios_reporte ADD COLUMN IF NOT EXISTS datos jsonb NULL;
+ALTER TABLE envios_reporte ADD COLUMN IF NOT EXISTS pdf bytea NULL;
 `;
 
 async function migrate() {

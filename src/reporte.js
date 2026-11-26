@@ -9,7 +9,7 @@
 const fs = require("fs");
 const path = require("path");
 const express = require("express");
-const { q, audit } = require("./db");
+const { q, tx, audit } = require("./db");
 const A = require("./auth");
 const { fechaValida, hoyPanama, sumarDias, fechaVentaDe } = require("./calc");
 const L = require("../public/liquidacion.js");
@@ -120,6 +120,11 @@ ${sin ? `<p style="color:#9a6700">${sin} camión(es) de SAP sin chofer asignado;
   return { html, texto };
 }
 
+// Liquidación inicial guardada de una venta: la del primer correo enviado con éxito.
+async function copiaInicial(fechaVenta) {
+  const { rows } = await q("SELECT id, datos, creado FROM envios_reporte WHERE fecha_venta = $1 AND estado = 'enviado' AND datos IS NOT NULL ORDER BY creado LIMIT 1", [fechaVenta]);
+  return rows[0] || null;
+}
 // Envía el reporte de una fecha de ENTREGA. Devuelve { estado, detalle, destinatarios, total }.
 async function enviarReporte({ fecha, fechas, tipo, usuario, para }) {
   const sincronizarSap = require("./api").sincronizarSap;
@@ -131,7 +136,9 @@ async function enviarReporte({ fecha, fechas, tipo, usuario, para }) {
     [fechas.venta, tipo, estado, dest, total ?? null, detalle, usuario ? usuario.id : null]);
   if (!dest.length) { await guarda("error", "No hay correos en la lista."); return { estado: "error", detalle: "No hay correos en la lista. Agrégalos en Usuarios → Reporte por correo." }; }
   if (!transporte()) { await guarda("error", "Correo sin configurar."); return { estado: "error", detalle: "El envío de correo no está configurado en el servidor (falta la cuenta que envía)." }; }
-  const I = await sincronizarSap(fecha, usuario ? usuario.id : null, true);
+  // Si ya se envió esta venta, se reenvía la MISMA liquidación inicial guardada (no las cifras de SAP de ahora).
+  const copia = await copiaInicial(fv);
+  const I = copia ? copia.datos : await sincronizarSap(fecha, usuario ? usuario.id : null, true);
   if (I.configurado === false) { await guarda("error", "SAP sin configurar."); return { estado: "error", detalle: "La conexión con SAP no está configurada." }; }
   if (I.error) { await guarda("error", I.error); return { estado: "error", detalle: I.error }; }
   if (!(I.camiones || []).length) { await guarda("sin_datos", "SAP no tiene facturación DT de rutas para esa venta."); return { estado: "sin_datos", detalle: "SAP no tiene facturación DT de rutas para la venta del " + L.fechaLarga(fv) + "; no se envió nada." }; }
@@ -144,7 +151,19 @@ async function enviarReporte({ fecha, fechas, tipo, usuario, para }) {
     await guarda("error", e.message, pdf.total);
     return { estado: "error", detalle: "No se pudo enviar el correo: " + e.message };
   }
-  await guarda("enviado", "", pdf.total);
+  // Copia fija de lo enviado (datos y PDF). El PRIMER envío exitoso de esa venta queda además como liquidación inicial
+  // (sap_inicial), para que las liquidaciones y depósitos de la tarde no cambien los números facturados al inicio.
+  const datos = { fechas, consultado: I.consultado, camiones: I.camiones, sinAsignarFilas: I.sinAsignarFilas || [] };
+  await tx(async (c) => {
+    const { rows: prev } = await c.query("SELECT 1 FROM envios_reporte WHERE fecha_venta = $1 AND estado = 'enviado' LIMIT 1", [fechas.venta]);
+    await c.query("INSERT INTO envios_reporte (fecha_venta, tipo, estado, destinatarios, total_c, detalle, enviado_por, datos, pdf) VALUES ($1,$2,'enviado',$3,$4,'',$5,$6,$7)",
+      [fechas.venta, tipo, dest, pdf.total, usuario ? usuario.id : null, JSON.stringify(datos), pdf.datos]);
+    if (!prev.length) {
+      await c.query("DELETE FROM sap_inicial WHERE fecha_venta = $1", [fv]);
+      await c.query(`INSERT INTO sap_inicial (fecha_venta, camion, documentos, facturado_c, merma_c, devolucion_c, neto_c, consultado, credito_c, fuente)
+        SELECT fecha_venta, camion, documentos, facturado_c, merma_c, devolucion_c, neto_c, consultado, credito_c, 'correo' FROM sap_facturacion WHERE fecha_venta = $1`, [fv]);
+    }
+  });
   await audit(null, usuario ? usuario.id : null, "reporte_correo", { tipo, fechaVenta: fechas.venta, destinatarios: dest, total: pdf.total });
   return { estado: "enviado", detalle: "Enviado a " + dest.join(", ") + ".", destinatarios: dest, total: pdf.total };
 }
@@ -185,8 +204,8 @@ router.use((req, res, next) => {
 router.get("/", A.requiere("gerente", "asistente"), h(async (req, res) => {
   const aj = await leerAjustes();
   const t = transporte();
-  const { rows } = await q(`SELECT e.fecha_venta AS "fechaVenta", e.tipo, e.estado, e.destinatarios, e.total_c AS total, e.detalle, e.creado, u.nombre AS por
-    FROM envios_reporte e LEFT JOIN usuarios u ON u.id = e.enviado_por ORDER BY e.creado DESC LIMIT 15`);
+  const { rows } = await q(`SELECT e.id, e.fecha_venta AS "fechaVenta", e.tipo, e.estado, e.destinatarios, e.total_c AS total, e.detalle, e.creado, u.nombre AS por,
+    e.pdf IS NOT NULL AS "tienePdf" FROM envios_reporte e LEFT JOIN usuarios u ON u.id = e.enviado_por ORDER BY e.creado DESC LIMIT 15`);
   res.json({ ...aj, transporte: t ? t.tipo : null, remitente: t ? t.remitente : null, envios: rows.map((r) => ({ ...r, total: r.total == null ? null : Number(r.total) })) });
 }));
 router.put("/", A.requiere("gerente"), h(async (req, res) => {
@@ -199,6 +218,25 @@ router.put("/", A.requiere("gerente"), h(async (req, res) => {
     ON CONFLICT (clave) DO UPDATE SET valor = EXCLUDED.valor, actualizado = now(), actualizado_por = EXCLUDED.actualizado_por`, [CLAVE, JSON.stringify(valor), req.user.id]);
   await audit(null, req.user.id, "reporte_correo_ajustes", valor);
   res.json(valor);
+}));
+// Datos de la liquidación inicial guardada (para que el PDF del Panel use las mismas cifras del correo).
+router.get("/inicial", A.requiere("gerente", "asistente"), h(async (req, res) => {
+  const venta = String(req.query.venta || "");
+  if (!fechaValida(venta)) return res.status(400).json({ error: "Fecha no válida." });
+  const c = await copiaInicial(venta);
+  res.json(c ? { id: c.id, enviado: c.creado, ...c.datos } : { id: null });
+}));
+// Copia del PDF tal como se envió: por id de envío, o el primer envío exitoso de una venta (?venta=AAAA-MM-DD).
+router.get("/copia.pdf", A.requiere("gerente", "asistente"), h(async (req, res) => {
+  const id = Number(req.query.id) || 0, venta = String(req.query.venta || "");
+  if (!id && !fechaValida(venta)) return res.status(400).json({ error: "Falta el envío." });
+  const { rows } = await q(id ? "SELECT fecha_venta, pdf, creado FROM envios_reporte WHERE id = $1 AND pdf IS NOT NULL"
+    : "SELECT fecha_venta, pdf, creado FROM envios_reporte WHERE fecha_venta = $1 AND estado = 'enviado' AND pdf IS NOT NULL ORDER BY creado LIMIT 1", [id || venta]);
+  if (!rows[0]) return res.status(404).json({ error: "No hay copia guardada de un correo enviado para esa venta." });
+  const nom = L.nombreArchivo(rows[0].fecha_venta).replace(/\.pdf$/, " (copia del correo).pdf");
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("Content-Disposition", "attachment; filename=\"" + nom.normalize("NFD").replace(/[\u0300-\u036f]/g, "") + "\"; filename*=UTF-8''" + encodeURIComponent(nom));
+  res.send(rows[0].pdf);
 }));
 router.post("/enviar", A.requiere("gerente", "asistente"), h(async (req, res) => {
   const b = req.body || {};

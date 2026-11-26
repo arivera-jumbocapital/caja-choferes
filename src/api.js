@@ -397,7 +397,7 @@ api.get("/liquidacion.xlsx", A.requiere(...OFICINA), h(async (req, res) => {
     }
     const lect = (rows) => rows.reduce((a, r) => (!a || r.consultado > a ? r.consultado : a), null);
     dias.push({ fechaVenta: fv, entrega: cols.map((c) => c.entrega).filter(Boolean).sort()[0] || sumarDias(fv, new Date(fv + "T12:00:00Z").getUTCDay() === 6 ? 2 : 1),
-      cols, sinInicial, leidoInicial: sinInicial ? null : lect(I), leidoFinal: lect(F) });
+      cols, sinInicial, leidoInicial: sinInicial ? null : lect(I), leidoFinal: lect(F), inicialCorreo: I.some((x) => x.fuente === "correo") });
   }
   if (!dias.length) return bad(res, "No hay venta DT de SAP ni recibos en esas fechas.", 404);
   const { libroLiquidacion, nombreLibro } = require("./liquidacionXlsx");

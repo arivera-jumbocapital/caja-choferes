@@ -137,7 +137,7 @@ function hoja(wb, D, logo, opts) {
 
   // Notas de origen de los datos
   const notas = [
-    "Liquidación inicial: " + (D.sinInicial ? "no hay lectura inicial guardada para este día; se usa la facturación actual de SAP." : "SAP leído el " + fechaHora(D.leidoInicial)),
+    "Liquidación inicial: " + (D.sinInicial ? "no hay lectura inicial guardada para este día; se usa la facturación actual de SAP." : (D.inicialCorreo ? "copia guardada al enviar el correo del Reporte Inicial de Liquidación (SAP leído el " + fechaHora(D.leidoInicial) + ")" : "SAP leído el " + fechaHora(D.leidoInicial))),
     "Liquidación final: SAP" + (D.leidoFinal ? " leído el " + fechaHora(D.leidoFinal) : "") + " (canal DT). Notas de crédito y facturas = cambios en SAP después de la lectura inicial.",
     "Liquidación inicial = total facturado DT. Crédito = clientes DT con condición de pago a crédito en SAP; se resta porque no se cobra en caja. Liquidación final = lo de contado.",
     "ACH, Yappy, cheque y efectivo: recibos de los choferes en el portal. Dinero recibido en caja = la suma de los cuatro. Cobrado = lo recibido en recibos ya verificados por la oficina.",
